@@ -1,4 +1,5 @@
 name: Fetch market data
+# re-trigger workflow indexing
 
 on:
   schedule:
