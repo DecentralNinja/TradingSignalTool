@@ -43,3 +43,19 @@ export async function saveSignal(client, signalRow) {
     throw new Error(`Failed to save signal: ${error.message}`)
   }
 }
+
+export async function getRecentVolatilities(client, symbol, limit) {
+  const { data, error } = await client
+    .from('signals')
+    .select('volatility')
+    .eq('symbol', symbol)
+    .not('volatility', 'is', null)
+    .order('evaluated_at', { ascending: false })
+    .limit(limit)
+
+  if (error) {
+    throw new Error(`Failed to load volatility history: ${error.message}`)
+  }
+
+  return data.map((row) => row.volatility)
+}

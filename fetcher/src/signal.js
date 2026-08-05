@@ -83,6 +83,38 @@ function scoreOpenInterestTrend(priceChangePct, oiChangePct) {
   return { score: 0, reason: null }
 }
 
+// Standard deviation of log returns between consecutive snapshots in the window —
+// a measure of how choppy/volatile price action has been, in our own units (not
+// annualized), so it's only meaningful compared against our own history below.
+export function computeRealizedVolatility(snapshots) {
+  if (snapshots.length < 2) return null
+
+  const returns = []
+  for (let i = 1; i < snapshots.length; i++) {
+    const prev = snapshots[i - 1].mark_price
+    const curr = snapshots[i].mark_price
+    returns.push(Math.log(curr / prev))
+  }
+
+  const mean = returns.reduce((sum, r) => sum + r, 0) / returns.length
+  const variance = returns.reduce((sum, r) => sum + (r - mean) ** 2, 0) / returns.length
+  return Math.sqrt(variance) * 100
+}
+
+// Classifies the current window's volatility relative to a trailing average of
+// our own past readings — not an absolute threshold, since we have no validated
+// basis for one yet. Needs a handful of prior readings before it means anything.
+export function classifyVolatilityRegime(currentVolatility, recentVolatilities) {
+  if (currentVolatility == null) return 'unknown'
+  if (recentVolatilities.length < 5) return 'insufficient_history'
+
+  const baseline = recentVolatilities.reduce((sum, v) => sum + v, 0) / recentVolatilities.length
+
+  if (currentVolatility > baseline * 1.2) return 'elevated'
+  if (currentVolatility < baseline * 0.8) return 'low'
+  return 'normal'
+}
+
 // snapshots must be sorted ascending by fetched_at and cover the rolling window.
 export function evaluateSignal(snapshots) {
   const earliest = snapshots[0]
@@ -111,5 +143,6 @@ export function evaluateSignal(snapshots) {
     signal,
     score: totalScore,
     reason: reasons.length > 0 ? reasons.join('; ') : 'no rules triggered',
+    volatility: computeRealizedVolatility(snapshots),
   }
 }

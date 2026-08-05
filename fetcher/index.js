@@ -8,8 +8,14 @@ import {
   getTopTraderPositionRatio,
   getBasis,
 } from './src/binance.js'
-import { getSupabaseClient, saveSnapshot, getRecentSnapshots, saveSignal } from './src/supabase.js'
-import { evaluateSignal, WINDOW_HOURS } from './src/signal.js'
+import {
+  getSupabaseClient,
+  saveSnapshot,
+  getRecentSnapshots,
+  saveSignal,
+  getRecentVolatilities,
+} from './src/supabase.js'
+import { evaluateSignal, classifyVolatilityRegime, WINDOW_HOURS } from './src/signal.js'
 
 const SYMBOL = 'BTCUSDT'
 
@@ -59,7 +65,10 @@ async function main() {
 
   const windowStart = new Date(Date.now() - WINDOW_HOURS * 60 * 60 * 1000).toISOString()
   const windowSnapshots = await getRecentSnapshots(client, SYMBOL, windowStart)
-  const { signal, score, reason } = evaluateSignal(windowSnapshots)
+  const { signal, score, reason, volatility } = evaluateSignal(windowSnapshots)
+
+  const recentVolatilities = await getRecentVolatilities(client, SYMBOL, 50)
+  const volatilityRegime = classifyVolatilityRegime(volatility, recentVolatilities)
 
   const signalRow = {
     symbol: SYMBOL,
@@ -68,6 +77,8 @@ async function main() {
     window_end: snapshot.fetched_at,
     signal,
     reason: `score ${score} (${windowSnapshots.length} snapshot${windowSnapshots.length === 1 ? '' : 's'} in window): ${reason}`,
+    volatility,
+    volatility_regime: volatilityRegime,
   }
 
   await saveSignal(client, signalRow)
