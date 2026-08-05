@@ -2,7 +2,9 @@ name: Fetch market data
 
 on:
   schedule:
-    - cron: '*/15 * * * *'
+    # Offset from :00/:15/:30/:45 — GitHub documents those as the highest-load,
+    # most delay-prone times for scheduled workflows.
+    - cron: '7,22,37,52 * * * *'
   workflow_dispatch: {}
 
 jobs:
