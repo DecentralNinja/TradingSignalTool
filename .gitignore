@@ -3,3 +3,5 @@ dist/
 .env
 .env.local
 actions-runner/
+lambda-deploy/
+lambda-deploy.zip
