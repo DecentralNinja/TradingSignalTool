@@ -45,6 +45,9 @@ create table if not exists signals (
   reason text,
   volatility numeric,
   volatility_regime text,
+  outcome_price numeric,
+  outcome_evaluated_at timestamptz,
+  outcome_correct boolean,
   created_at timestamptz not null default now()
 );
 

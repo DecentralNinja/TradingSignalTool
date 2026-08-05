@@ -16,8 +16,12 @@ import {
   getRecentSnapshots,
   saveSignal,
   getRecentVolatilities,
+  getSignalsPendingOutcome,
+  getSnapshotPrice,
+  saveSignalOutcome,
 } from './src/supabase.js'
 import { evaluateSignal, classifyVolatilityRegime, WINDOW_HOURS } from './src/signal.js'
+import { evaluateOutcome } from './src/accuracy.js'
 
 const SYMBOL = 'BTCUSDT'
 
@@ -98,6 +102,36 @@ async function main() {
 
   await saveSignal(client, signalRow)
   console.log('Signal:', signalRow)
+
+  await scorePendingOutcomes(client, snapshot)
+}
+
+// Signals from WINDOW_HOURS ago have had their window play out, so we can now
+// check whether they were actually right.
+async function scorePendingOutcomes(client, snapshot) {
+  const cutoff = new Date(Date.now() - WINDOW_HOURS * 60 * 60 * 1000).toISOString()
+  const pending = await getSignalsPendingOutcome(client, SYMBOL, cutoff)
+
+  for (const pendingSignal of pending) {
+    const originalPrice = await getSnapshotPrice(client, SYMBOL, pendingSignal.evaluated_at)
+    if (originalPrice == null) continue
+
+    const { correct, priceChangePct } = evaluateOutcome(
+      pendingSignal.signal,
+      originalPrice,
+      snapshot.mark_price
+    )
+
+    await saveSignalOutcome(client, pendingSignal.id, {
+      outcome_price: snapshot.mark_price,
+      outcome_evaluated_at: snapshot.fetched_at,
+      outcome_correct: correct,
+    })
+
+    console.log(
+      `Scored signal ${pendingSignal.id} (${pendingSignal.signal}): ${correct ? 'correct' : 'incorrect'} (${priceChangePct.toFixed(2)}% move)`
+    )
+  }
 }
 
 main().catch((err) => {

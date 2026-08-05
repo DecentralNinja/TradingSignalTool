@@ -1,0 +1,30 @@
+.accuracy-stats {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px 20px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+
+  &__row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 14px;
+  }
+
+  &__label {
+    color: var(--text-secondary);
+  }
+
+  &__value {
+    color: var(--text-primary);
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+
+  &__empty {
+    color: var(--text-muted);
+    font-size: 14px;
+  }
+}

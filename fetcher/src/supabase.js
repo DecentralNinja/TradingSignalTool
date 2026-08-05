@@ -68,3 +68,51 @@ export async function getRecentVolatilities(client, symbol, limit) {
     return data.map((row) => row.volatility)
   })
 }
+
+// Signals old enough for their window to have played out, but not yet scored.
+export async function getSignalsPendingOutcome(client, symbol, cutoff) {
+  return withRetry(async () => {
+    const { data, error } = await client
+      .from('signals')
+      .select('id, evaluated_at, signal')
+      .eq('symbol', symbol)
+      .is('outcome_correct', null)
+      .lte('evaluated_at', cutoff)
+      .order('evaluated_at', { ascending: true })
+
+    if (error) {
+      throw new Error(`Failed to load pending signals: ${error.message}`)
+    }
+
+    return data
+  })
+}
+
+// A signal's evaluated_at is always set to that cycle's snapshot fetched_at,
+// so this is an exact lookup, not a nearest-match search.
+export async function getSnapshotPrice(client, symbol, fetchedAt) {
+  return withRetry(async () => {
+    const { data, error } = await client
+      .from('market_snapshots')
+      .select('mark_price')
+      .eq('symbol', symbol)
+      .eq('fetched_at', fetchedAt)
+      .maybeSingle()
+
+    if (error) {
+      throw new Error(`Failed to load snapshot price: ${error.message}`)
+    }
+
+    return data?.mark_price ?? null
+  })
+}
+
+export async function saveSignalOutcome(client, signalId, outcome) {
+  await withRetry(async () => {
+    const { error } = await client.from('signals').update(outcome).eq('id', signalId)
+
+    if (error) {
+      throw new Error(`Failed to save signal outcome: ${error.message}`)
+    }
+  })
+}

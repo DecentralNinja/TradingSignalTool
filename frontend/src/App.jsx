@@ -3,6 +3,7 @@ import { useDashboardData } from './hooks/useDashboardData'
 import { SignalBanner } from './components/SignalBanner'
 import { StatTile } from './components/StatTile'
 import { SignalHistory } from './components/SignalHistory'
+import { AccuracyStats } from './components/AccuracyStats'
 import { formatDateTime, formatPercent, formatPrice, formatRatio } from './lib/format'
 
 function percentChange(current, previous) {
@@ -11,7 +12,7 @@ function percentChange(current, previous) {
 }
 
 function App() {
-  const { latestSnapshot, previousSnapshot, latestSignal, signalHistory, loading, error } =
+  const { latestSnapshot, previousSnapshot, latestSignal, signalHistory, accuracy, loading, error } =
     useDashboardData()
 
   if (loading) {
@@ -86,6 +87,11 @@ function App() {
           value={latestSnapshot?.fear_greed_value != null ? `${latestSnapshot.fear_greed_value}` : '—'}
           delta={latestSnapshot?.fear_greed_classification ?? null}
         />
+      </section>
+
+      <section className="app__section">
+        <h2>Signal accuracy</h2>
+        <AccuracyStats accuracy={accuracy} />
       </section>
 
       <section className="app__section">
