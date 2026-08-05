@@ -12,6 +12,24 @@ async function fetchJson(url) {
   })
 }
 
+// These endpoints normally return a one-element array; occasionally they come
+// back empty (or shaped differently) for reasons Binance doesn't document.
+// The empty-check runs inside the same retry loop as the fetch itself, so a
+// transient empty response gets retried instead of crashing on a bad destructure.
+async function fetchFirst(url) {
+  return withRetry(async () => {
+    const res = await fetch(url)
+    if (!res.ok) {
+      throw new Error(`${url} failed: ${res.status} ${await res.text()}`)
+    }
+    const data = await res.json()
+    if (!Array.isArray(data) || data.length === 0) {
+      throw new Error(`${url} returned no data: ${JSON.stringify(data)}`)
+    }
+    return data[0]
+  })
+}
+
 // premiumIndex gives mark price and the current funding rate in a single call
 export async function getMarkPriceAndFunding(symbol) {
   const data = await fetchJson(`${FUTURES_BASE}/fapi/v1/premiumIndex?symbol=${symbol}`)
@@ -31,7 +49,7 @@ export async function getOpenInterest(symbol) {
 }
 
 export async function getLongShortRatio(symbol) {
-  const [data] = await fetchJson(
+  const data = await fetchFirst(
     `${FUTURES_BASE}/futures/data/globalLongShortAccountRatio?symbol=${symbol}&period=15m&limit=1`
   )
   return {
@@ -43,7 +61,7 @@ export async function getLongShortRatio(symbol) {
 }
 
 export async function getTakerBuySellVolume(symbol) {
-  const [data] = await fetchJson(
+  const data = await fetchFirst(
     `${FUTURES_BASE}/futures/data/takerlongshortRatio?symbol=${symbol}&period=15m&limit=1`
   )
   return {
@@ -55,7 +73,7 @@ export async function getTakerBuySellVolume(symbol) {
 
 // Position-size-weighted, restricted to Binance's top traders (not all accounts).
 export async function getTopTraderPositionRatio(symbol) {
-  const [data] = await fetchJson(
+  const data = await fetchFirst(
     `${FUTURES_BASE}/futures/data/topLongShortPositionRatio?symbol=${symbol}&period=15m&limit=1`
   )
   return {
@@ -67,7 +85,7 @@ export async function getTopTraderPositionRatio(symbol) {
 
 // Spread between the perpetual futures price and the index (spot) price.
 export async function getBasis(symbol) {
-  const [data] = await fetchJson(
+  const data = await fetchFirst(
     `${FUTURES_BASE}/futures/data/basis?pair=${symbol}&contractType=PERPETUAL&period=15m&limit=1`
   )
   return {

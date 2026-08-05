@@ -2,7 +2,10 @@ import { withRetry } from './retry.js'
 
 const BASE = 'https://api.bybit.com'
 
-async function fetchJson(url) {
+// Bybit's "list" is normally one element for a single-symbol query; the empty
+// check runs inside the retry loop so a transient empty response gets retried
+// instead of crashing on undefined access.
+async function fetchFirst(url) {
   return withRetry(async () => {
     const res = await fetch(url)
     if (!res.ok) {
@@ -12,14 +15,17 @@ async function fetchJson(url) {
     if (body.retCode !== 0) {
       throw new Error(`${url} failed: retCode ${body.retCode} ${body.retMsg}`)
     }
-    return body.result
+    const { list } = body.result
+    if (!Array.isArray(list) || list.length === 0) {
+      throw new Error(`${url} returned no data: ${JSON.stringify(body.result)}`)
+    }
+    return list[0]
   })
 }
 
 // Mark price, funding rate, and open interest all come back in a single call.
 export async function getTicker(symbol) {
-  const { list } = await fetchJson(`${BASE}/v5/market/tickers?category=linear&symbol=${symbol}`)
-  const data = list[0]
+  const data = await fetchFirst(`${BASE}/v5/market/tickers?category=linear&symbol=${symbol}`)
   return {
     markPrice: Number(data.markPrice),
     fundingRate: Number(data.fundingRate),
@@ -29,10 +35,9 @@ export async function getTicker(symbol) {
 }
 
 export async function getLongShortRatio(symbol) {
-  const { list } = await fetchJson(
+  const data = await fetchFirst(
     `${BASE}/v5/market/account-ratio?category=linear&symbol=${symbol}&period=15min&limit=1`
   )
-  const data = list[0]
   const longAccountRatio = Number(data.buyRatio)
   const shortAccountRatio = Number(data.sellRatio)
   return {
