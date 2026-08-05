@@ -6,7 +6,8 @@ import {
   getLongShortRatio,
   getTakerBuySellVolume,
 } from './src/binance.js'
-import { getSupabaseClient, saveSnapshot } from './src/supabase.js'
+import { getSupabaseClient, saveSnapshot, getRecentSnapshots, saveSignal } from './src/supabase.js'
+import { evaluateSignal, WINDOW_HOURS } from './src/signal.js'
 
 const SYMBOL = 'BTCUSDT'
 
@@ -46,6 +47,22 @@ async function main() {
 
   await saveSnapshot(client, snapshot)
   console.log('Saved to Supabase.')
+
+  const windowStart = new Date(Date.now() - WINDOW_HOURS * 60 * 60 * 1000).toISOString()
+  const windowSnapshots = await getRecentSnapshots(client, SYMBOL, windowStart)
+  const { signal, score, reason } = evaluateSignal(windowSnapshots)
+
+  const signalRow = {
+    symbol: SYMBOL,
+    evaluated_at: snapshot.fetched_at,
+    window_start: windowStart,
+    window_end: snapshot.fetched_at,
+    signal,
+    reason: `score ${score} (${windowSnapshots.length} snapshot${windowSnapshots.length === 1 ? '' : 's'} in window): ${reason}`,
+  }
+
+  await saveSignal(client, signalRow)
+  console.log('Signal:', signalRow)
 }
 
 main().catch((err) => {

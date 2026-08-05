@@ -20,3 +20,26 @@ export async function saveSnapshot(client, snapshot) {
     throw new Error(`Failed to save snapshot: ${error.message}`)
   }
 }
+
+export async function getRecentSnapshots(client, symbol, windowStart) {
+  const { data, error } = await client
+    .from('market_snapshots')
+    .select('*')
+    .eq('symbol', symbol)
+    .gte('fetched_at', windowStart)
+    .order('fetched_at', { ascending: true })
+
+  if (error) {
+    throw new Error(`Failed to load snapshots: ${error.message}`)
+  }
+
+  return data
+}
+
+export async function saveSignal(client, signalRow) {
+  const { error } = await client.from('signals').insert(signalRow)
+
+  if (error) {
+    throw new Error(`Failed to save signal: ${error.message}`)
+  }
+}
