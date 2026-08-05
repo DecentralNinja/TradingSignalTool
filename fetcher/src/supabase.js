@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
+import { withRetry } from './retry.js'
 
 export function getSupabaseClient() {
   const url = process.env.SUPABASE_URL
@@ -12,50 +13,58 @@ export function getSupabaseClient() {
 }
 
 export async function saveSnapshot(client, snapshot) {
-  const { error } = await client.from('market_snapshots').upsert(snapshot, {
-    onConflict: 'symbol,fetched_at',
-  })
+  await withRetry(async () => {
+    const { error } = await client.from('market_snapshots').upsert(snapshot, {
+      onConflict: 'symbol,fetched_at',
+    })
 
-  if (error) {
-    throw new Error(`Failed to save snapshot: ${error.message}`)
-  }
+    if (error) {
+      throw new Error(`Failed to save snapshot: ${error.message}`)
+    }
+  })
 }
 
 export async function getRecentSnapshots(client, symbol, windowStart) {
-  const { data, error } = await client
-    .from('market_snapshots')
-    .select('*')
-    .eq('symbol', symbol)
-    .gte('fetched_at', windowStart)
-    .order('fetched_at', { ascending: true })
+  return withRetry(async () => {
+    const { data, error } = await client
+      .from('market_snapshots')
+      .select('*')
+      .eq('symbol', symbol)
+      .gte('fetched_at', windowStart)
+      .order('fetched_at', { ascending: true })
 
-  if (error) {
-    throw new Error(`Failed to load snapshots: ${error.message}`)
-  }
+    if (error) {
+      throw new Error(`Failed to load snapshots: ${error.message}`)
+    }
 
-  return data
+    return data
+  })
 }
 
 export async function saveSignal(client, signalRow) {
-  const { error } = await client.from('signals').insert(signalRow)
+  await withRetry(async () => {
+    const { error } = await client.from('signals').insert(signalRow)
 
-  if (error) {
-    throw new Error(`Failed to save signal: ${error.message}`)
-  }
+    if (error) {
+      throw new Error(`Failed to save signal: ${error.message}`)
+    }
+  })
 }
 
 export async function getRecentVolatilities(client, symbol, limit) {
-  const { data, error } = await client
-    .from('signals')
-    .select('volatility')
-    .eq('symbol', symbol)
-    .not('volatility', 'is', null)
-    .order('evaluated_at', { ascending: false })
-    .limit(limit)
+  return withRetry(async () => {
+    const { data, error } = await client
+      .from('signals')
+      .select('volatility')
+      .eq('symbol', symbol)
+      .not('volatility', 'is', null)
+      .order('evaluated_at', { ascending: false })
+      .limit(limit)
 
-  if (error) {
-    throw new Error(`Failed to load volatility history: ${error.message}`)
-  }
+    if (error) {
+      throw new Error(`Failed to load volatility history: ${error.message}`)
+    }
 
-  return data.map((row) => row.volatility)
+    return data.map((row) => row.volatility)
+  })
 }

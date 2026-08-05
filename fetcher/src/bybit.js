@@ -1,15 +1,19 @@
+import { withRetry } from './retry.js'
+
 const BASE = 'https://api.bybit.com'
 
 async function fetchJson(url) {
-  const res = await fetch(url)
-  if (!res.ok) {
-    throw new Error(`${url} failed: ${res.status} ${await res.text()}`)
-  }
-  const body = await res.json()
-  if (body.retCode !== 0) {
-    throw new Error(`${url} failed: retCode ${body.retCode} ${body.retMsg}`)
-  }
-  return body.result
+  return withRetry(async () => {
+    const res = await fetch(url)
+    if (!res.ok) {
+      throw new Error(`${url} failed: ${res.status} ${await res.text()}`)
+    }
+    const body = await res.json()
+    if (body.retCode !== 0) {
+      throw new Error(`${url} failed: retCode ${body.retCode} ${body.retMsg}`)
+    }
+    return body.result
+  })
 }
 
 // Mark price, funding rate, and open interest all come back in a single call.

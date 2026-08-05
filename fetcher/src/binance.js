@@ -1,11 +1,15 @@
+import { withRetry } from './retry.js'
+
 const FUTURES_BASE = 'https://fapi.binance.com'
 
 async function fetchJson(url) {
-  const res = await fetch(url)
-  if (!res.ok) {
-    throw new Error(`${url} failed: ${res.status} ${await res.text()}`)
-  }
-  return res.json()
+  return withRetry(async () => {
+    const res = await fetch(url)
+    if (!res.ok) {
+      throw new Error(`${url} failed: ${res.status} ${await res.text()}`)
+    }
+    return res.json()
+  })
 }
 
 // premiumIndex gives mark price and the current funding rate in a single call
