@@ -1,4 +1,6 @@
-const FUTURES_BASE = 'https://fapi.binance.com'
+// Binance blocks GitHub Actions' hosted runners (US datacenter IPs), so this
+// defaults to a Cloudflare Worker proxy in production; override for local dev.
+const FUTURES_BASE = process.env.BINANCE_BASE_URL || 'https://fapi.binance.com'
 
 async function fetchJson(url) {
   const res = await fetch(url)
