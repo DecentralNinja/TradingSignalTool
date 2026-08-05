@@ -32,6 +32,7 @@ function App() {
 
   const priceDelta = percentChange(latestSnapshot?.mark_price, previousSnapshot?.mark_price)
   const oiDelta = percentChange(latestSnapshot?.open_interest, previousSnapshot?.open_interest)
+  const priceDivergence = percentChange(latestSnapshot?.mark_price, latestSnapshot?.bybit_mark_price)
 
   return (
     <div className="app">
@@ -68,6 +69,17 @@ function App() {
         <StatTile
           label="Taker buy/sell ratio"
           value={formatRatio(latestSnapshot?.taker_buy_sell_ratio)}
+        />
+      </section>
+
+      <section className="app__section app__metrics">
+        <StatTile
+          label="Bybit funding rate"
+          value={formatPercent((latestSnapshot?.bybit_funding_rate ?? 0) * 100, { decimals: 4 })}
+        />
+        <StatTile
+          label="Binance vs Bybit price"
+          value={priceDivergence != null ? formatPercent(priceDivergence, { signed: true, decimals: 3 }) : '—'}
         />
       </section>
 
