@@ -5,6 +5,8 @@ import {
   getOpenInterest,
   getLongShortRatio,
   getTakerBuySellVolume,
+  getTopTraderPositionRatio,
+  getBasis,
 } from './src/binance.js'
 import { getSupabaseClient, saveSnapshot, getRecentSnapshots, saveSignal } from './src/supabase.js'
 import { evaluateSignal, WINDOW_HOURS } from './src/signal.js'
@@ -12,11 +14,13 @@ import { evaluateSignal, WINDOW_HOURS } from './src/signal.js'
 const SYMBOL = 'BTCUSDT'
 
 async function fetchSnapshot(symbol) {
-  const [price, oi, longShort, takerVol] = await Promise.all([
+  const [price, oi, longShort, takerVol, topTrader, basis] = await Promise.all([
     getMarkPriceAndFunding(symbol),
     getOpenInterest(symbol),
     getLongShortRatio(symbol),
     getTakerBuySellVolume(symbol),
+    getTopTraderPositionRatio(symbol),
+    getBasis(symbol),
   ])
 
   return {
@@ -32,6 +36,11 @@ async function fetchSnapshot(symbol) {
     taker_buy_vol: takerVol.buyVol,
     taker_sell_vol: takerVol.sellVol,
     taker_buy_sell_ratio: takerVol.buySellRatio,
+    top_trader_long_account_ratio: topTrader.longAccountRatio,
+    top_trader_short_account_ratio: topTrader.shortAccountRatio,
+    top_trader_long_short_ratio: topTrader.longShortRatio,
+    basis: basis.basis,
+    basis_rate: basis.basisRate,
   }
 }
 

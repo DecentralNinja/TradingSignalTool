@@ -48,3 +48,26 @@ export async function getTakerBuySellVolume(symbol) {
     buySellRatio: Number(data.buySellRatio),
   }
 }
+
+// Position-size-weighted, restricted to Binance's top traders (not all accounts).
+export async function getTopTraderPositionRatio(symbol) {
+  const [data] = await fetchJson(
+    `${FUTURES_BASE}/futures/data/topLongShortPositionRatio?symbol=${symbol}&period=15m&limit=1`
+  )
+  return {
+    longAccountRatio: Number(data.longAccount),
+    shortAccountRatio: Number(data.shortAccount),
+    longShortRatio: Number(data.longShortRatio),
+  }
+}
+
+// Spread between the perpetual futures price and the index (spot) price.
+export async function getBasis(symbol) {
+  const [data] = await fetchJson(
+    `${FUTURES_BASE}/futures/data/basis?pair=${symbol}&contractType=PERPETUAL&period=15m&limit=1`
+  )
+  return {
+    basis: Number(data.basis),
+    basisRate: Number(data.basisRate),
+  }
+}

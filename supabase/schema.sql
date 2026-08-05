@@ -13,6 +13,11 @@ create table if not exists market_snapshots (
   taker_buy_vol numeric not null,
   taker_sell_vol numeric not null,
   taker_buy_sell_ratio numeric not null,
+  top_trader_long_account_ratio numeric,
+  top_trader_short_account_ratio numeric,
+  top_trader_long_short_ratio numeric,
+  basis numeric,
+  basis_rate numeric,
   created_at timestamptz not null default now(),
   unique (symbol, fetched_at)
 );
