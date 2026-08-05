@@ -18,6 +18,13 @@ create table if not exists market_snapshots (
   top_trader_long_short_ratio numeric,
   basis numeric,
   basis_rate numeric,
+  bybit_mark_price numeric,
+  bybit_funding_rate numeric,
+  bybit_next_funding_time timestamptz,
+  bybit_open_interest numeric,
+  bybit_long_account_ratio numeric,
+  bybit_short_account_ratio numeric,
+  bybit_long_short_ratio numeric,
   created_at timestamptz not null default now(),
   unique (symbol, fetched_at)
 );

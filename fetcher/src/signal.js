@@ -60,6 +60,28 @@ function scoreBasis(basisRate) {
   return { score: 0, reason: null }
 }
 
+// Only reinforces the funding-rate rule when Bybit independently shows the same
+// extreme — confirms a market-wide crowded trade rather than Binance-specific
+// noise. Deliberately does nothing when only one exchange is extreme, since that
+// divergence is exactly the "don't trust this reading as much" case, not a
+// separate signal to score on its own.
+function scoreCrossExchangeFunding(binanceRate, bybitRate) {
+  if (binanceRate == null || bybitRate == null) return { score: 0, reason: null }
+
+  const threshold = 0.0005
+  const side = (rate) => (rate > threshold ? 1 : rate < -threshold ? -1 : 0)
+  const binanceSide = side(binanceRate)
+  const bybitSide = side(bybitRate)
+
+  if (binanceSide !== 0 && binanceSide === bybitSide) {
+    return {
+      score: -binanceSide,
+      reason: `Binance and Bybit funding both extreme in the same direction (${(binanceRate * 100).toFixed(4)}% / ${(bybitRate * 100).toFixed(4)}%) — market-wide, not exchange-specific`,
+    }
+  }
+  return { score: 0, reason: null }
+}
+
 // Rising OI with rising price is a fresh trend; falling OI with rising price is
 // likely short covering (a weaker move), and vice versa.
 function scoreOpenInterestTrend(priceChangePct, oiChangePct) {
@@ -130,6 +152,7 @@ export function evaluateSignal(snapshots) {
     scoreOpenInterestTrend(priceChangePct, oiChangePct),
     scoreTopTraderRatio(latest.top_trader_long_short_ratio),
     scoreBasis(latest.basis_rate),
+    scoreCrossExchangeFunding(latest.funding_rate, latest.bybit_funding_rate),
   ]
 
   const totalScore = rules.reduce((sum, r) => sum + r.score, 0)
