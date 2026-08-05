@@ -33,6 +33,33 @@ function scoreTakerFlow(ratio) {
   return { score: 0, reason: null }
 }
 
+// Unlike retail long/short ratio, top trader positioning is read as confirmation,
+// not contrarian: extreme positioning by Binance's largest accounts is treated
+// as "smart money" conviction rather than a crowded trade to fade.
+function scoreTopTraderRatio(ratio) {
+  if (ratio == null) return { score: 0, reason: null }
+  if (ratio > 2) {
+    return { score: 1, reason: `top trader long/short ratio ${ratio.toFixed(2)} shows heavy long conviction (smart money bullish)` }
+  }
+  if (ratio < 0.5) {
+    return { score: -1, reason: `top trader long/short ratio ${ratio.toFixed(2)} shows heavy short conviction (smart money bearish)` }
+  }
+  return { score: 0, reason: null }
+}
+
+// A positive basis (futures pricier than spot) reflects leveraged demand paying a
+// premium (bullish); a negative basis reflects hedging/bearish pressure.
+function scoreBasis(basisRate) {
+  if (basisRate == null) return { score: 0, reason: null }
+  if (basisRate > 0.001) {
+    return { score: 1, reason: `basis rate ${(basisRate * 100).toFixed(3)}% shows futures trading at a premium (leveraged demand)` }
+  }
+  if (basisRate < -0.001) {
+    return { score: -1, reason: `basis rate ${(basisRate * 100).toFixed(3)}% shows futures trading at a discount (hedging/bearish pressure)` }
+  }
+  return { score: 0, reason: null }
+}
+
 // Rising OI with rising price is a fresh trend; falling OI with rising price is
 // likely short covering (a weaker move), and vice versa.
 function scoreOpenInterestTrend(priceChangePct, oiChangePct) {
@@ -69,6 +96,8 @@ export function evaluateSignal(snapshots) {
     scoreLongShortRatio(latest.long_short_ratio),
     scoreTakerFlow(latest.taker_buy_sell_ratio),
     scoreOpenInterestTrend(priceChangePct, oiChangePct),
+    scoreTopTraderRatio(latest.top_trader_long_short_ratio),
+    scoreBasis(latest.basis_rate),
   ]
 
   const totalScore = rules.reduce((sum, r) => sum + r.score, 0)
