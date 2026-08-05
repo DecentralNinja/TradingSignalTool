@@ -1,0 +1,24 @@
+.stat-tile {
+  padding: 16px 20px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+
+  &__label {
+    font-size: 13px;
+    color: var(--text-secondary);
+  }
+
+  &__value {
+    margin-top: 6px;
+    font-size: 24px;
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+
+  &__delta {
+    margin-top: 4px;
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+}

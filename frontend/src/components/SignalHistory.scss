@@ -1,0 +1,48 @@
+.signal-history {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+
+  th {
+    text-align: left;
+    padding: 8px 12px;
+    color: var(--text-muted);
+    font-weight: 500;
+    font-size: 12px;
+    border-bottom: 1px solid var(--gridline);
+  }
+
+  td {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--gridline);
+    color: var(--text-primary);
+    vertical-align: top;
+  }
+
+  &__reason {
+    color: var(--text-secondary);
+  }
+
+  &__badge {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 600;
+    color: #fff;
+
+    &--good {
+      background: var(--status-good);
+    }
+    &--critical {
+      background: var(--status-critical);
+    }
+    &--neutral {
+      background: var(--status-neutral);
+    }
+  }
+
+  &__empty {
+    color: var(--text-muted);
+  }
+}

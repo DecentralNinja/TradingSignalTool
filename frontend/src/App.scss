@@ -1,6 +1,79 @@
 .app {
-  max-width: 960px;
+  max-width: 720px;
   margin: 0 auto;
-  padding: 2rem;
-  text-align: center;
+  padding: 32px 20px 64px;
+
+  &__status {
+    text-align: center;
+    color: var(--text-secondary);
+    margin-top: 80px;
+
+    &--error {
+      color: var(--status-critical);
+    }
+  }
+
+  &__header {
+    text-align: center;
+    margin-bottom: 8px;
+
+    h1 {
+      font-size: 22px;
+      font-weight: 600;
+      margin: 0;
+      color: var(--text-primary);
+    }
+  }
+
+  &__symbol {
+    margin: 4px 0 0;
+    color: var(--text-muted);
+    font-size: 13px;
+    letter-spacing: 0.04em;
+  }
+
+  &__hero {
+    text-align: center;
+    margin: 24px 0 32px;
+  }
+
+  &__price {
+    font-size: 48px;
+    font-weight: 600;
+    color: var(--text-primary);
+    line-height: 1.1;
+  }
+
+  &__price-delta {
+    margin-top: 4px;
+    font-size: 16px;
+    color: var(--text-secondary);
+  }
+
+  &__updated {
+    margin-top: 8px;
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+
+  &__section {
+    margin-bottom: 32px;
+
+    h2 {
+      font-size: 16px;
+      font-weight: 600;
+      color: var(--text-primary);
+      margin: 0 0 12px;
+    }
+  }
+
+  &__metrics {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px;
+
+    @media (max-width: 480px) {
+      grid-template-columns: 1fr;
+    }
+  }
 }

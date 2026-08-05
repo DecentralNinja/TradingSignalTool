@@ -1,0 +1,53 @@
+.signal-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 20px 24px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-left: 4px solid var(--status);
+
+  &--good {
+    --status: var(--status-good);
+  }
+  &--critical {
+    --status: var(--status-critical);
+  }
+  &--neutral {
+    --status: var(--status-neutral);
+  }
+
+  &__icon {
+    flex: none;
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background: var(--status);
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    line-height: 1;
+  }
+
+  &__label {
+    font-size: 22px;
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+
+  &__reason {
+    margin-top: 4px;
+    color: var(--text-secondary);
+    font-size: 14px;
+    line-height: 1.5;
+  }
+
+  &__timestamp {
+    margin-top: 8px;
+    color: var(--text-muted);
+    font-size: 12px;
+  }
+}
