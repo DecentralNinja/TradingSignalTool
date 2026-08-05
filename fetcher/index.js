@@ -9,6 +9,7 @@ import {
   getBasis,
 } from './src/binance.js'
 import { getTicker as getBybitTicker, getLongShortRatio as getBybitLongShortRatio } from './src/bybit.js'
+import { getFearGreedIndex } from './src/fearGreed.js'
 import {
   getSupabaseClient,
   saveSnapshot,
@@ -21,7 +22,7 @@ import { evaluateSignal, classifyVolatilityRegime, WINDOW_HOURS } from './src/si
 const SYMBOL = 'BTCUSDT'
 
 async function fetchSnapshot(symbol) {
-  const [price, oi, longShort, takerVol, topTrader, basis, bybitTicker, bybitLongShort] =
+  const [price, oi, longShort, takerVol, topTrader, basis, bybitTicker, bybitLongShort, fearGreed] =
     await Promise.all([
       getMarkPriceAndFunding(symbol),
       getOpenInterest(symbol),
@@ -31,6 +32,7 @@ async function fetchSnapshot(symbol) {
       getBasis(symbol),
       getBybitTicker(symbol),
       getBybitLongShortRatio(symbol),
+      getFearGreedIndex(),
     ])
 
   return {
@@ -58,6 +60,8 @@ async function fetchSnapshot(symbol) {
     bybit_long_account_ratio: bybitLongShort.longAccountRatio,
     bybit_short_account_ratio: bybitLongShort.shortAccountRatio,
     bybit_long_short_ratio: bybitLongShort.longShortRatio,
+    fear_greed_value: fearGreed.value,
+    fear_greed_classification: fearGreed.classification,
   }
 }
 

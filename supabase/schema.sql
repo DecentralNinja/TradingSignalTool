@@ -25,6 +25,8 @@ create table if not exists market_snapshots (
   bybit_long_account_ratio numeric,
   bybit_short_account_ratio numeric,
   bybit_long_short_ratio numeric,
+  fear_greed_value numeric,
+  fear_greed_classification text,
   created_at timestamptz not null default now(),
   unique (symbol, fetched_at)
 );

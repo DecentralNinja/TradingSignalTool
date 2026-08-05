@@ -82,6 +82,21 @@ function scoreCrossExchangeFunding(binanceRate, bybitRate) {
   return { score: 0, reason: null }
 }
 
+// Extreme sentiment is contrarian, same logic as funding rate and long/short
+// ratio: broad fear often marks a bottom, broad greed often marks a top.
+// Thresholds match alternative.me's own "Extreme Fear"/"Extreme Greed" bands
+// rather than a number we picked ourselves.
+function scoreFearGreed(value) {
+  if (value == null) return { score: 0, reason: null }
+  if (value < 25) {
+    return { score: 1, reason: `Fear & Greed Index ${value} is Extreme Fear (contrarian bullish)` }
+  }
+  if (value > 75) {
+    return { score: -1, reason: `Fear & Greed Index ${value} is Extreme Greed (contrarian bearish)` }
+  }
+  return { score: 0, reason: null }
+}
+
 // Rising OI with rising price is a fresh trend; falling OI with rising price is
 // likely short covering (a weaker move), and vice versa.
 function scoreOpenInterestTrend(priceChangePct, oiChangePct) {
@@ -153,6 +168,7 @@ export function evaluateSignal(snapshots) {
     scoreTopTraderRatio(latest.top_trader_long_short_ratio),
     scoreBasis(latest.basis_rate),
     scoreCrossExchangeFunding(latest.funding_rate, latest.bybit_funding_rate),
+    scoreFearGreed(latest.fear_greed_value),
   ]
 
   const totalScore = rules.reduce((sum, r) => sum + r.score, 0)

@@ -81,6 +81,11 @@ function App() {
           label="Binance vs Bybit price"
           value={priceDivergence != null ? formatPercent(priceDivergence, { signed: true, decimals: 3 }) : '—'}
         />
+        <StatTile
+          label="Fear & Greed Index"
+          value={latestSnapshot?.fear_greed_value != null ? `${latestSnapshot.fear_greed_value}` : '—'}
+          delta={latestSnapshot?.fear_greed_classification ?? null}
+        />
       </section>
 
       <section className="app__section">
