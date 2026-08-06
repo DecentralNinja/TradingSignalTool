@@ -239,17 +239,32 @@ function backtestTimeframe(snapshots, windowHours, evaluateFn, label) {
     results.push({ signal, correct, rules })
   }
 
+  // Counts distinct episodes rather than raw 15-min ticks: four consecutive
+  // bullish readings in a row is one ongoing signal, not four separate ones.
+  const episodes = { bullish: 0, bearish: 0 }
+  let previousSignal = null
+  for (const r of results) {
+    if ((r.signal === 'bullish' || r.signal === 'bearish') && r.signal !== previousSignal) {
+      episodes[r.signal]++
+    }
+    previousSignal = r.signal
+  }
+  const days = results.length / 96
+
   const byType = { bullish: { correct: 0, total: 0 }, bearish: { correct: 0, total: 0 }, neutral: { correct: 0, total: 0 } }
   for (const r of results) {
     byType[r.signal].total++
     if (r.correct) byType[r.signal].correct++
   }
 
-  console.log(`\n=== ${label} backtest (${results.length} evaluated signals) ===`)
+  console.log(`\n=== ${label} backtest (${results.length} evaluated signals over ~${days.toFixed(1)} days) ===`)
   for (const [type, { correct, total }] of Object.entries(byType)) {
     const pct = total > 0 ? ((correct / total) * 100).toFixed(1) : 'n/a'
     console.log(`  ${type}: ${correct}/${total} correct (${pct}%)`)
   }
+  console.log(
+    `  episodes (distinct signal events, not raw ticks): ${episodes.bullish} bullish total (${(episodes.bullish / days).toFixed(2)}/day), ${episodes.bearish} bearish total (${(episodes.bearish / days).toFixed(2)}/day)`
+  )
 
   reportRuleBreakdown(results, 'bearish')
   reportRuleBreakdown(results, 'bullish')
