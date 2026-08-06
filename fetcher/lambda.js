@@ -22,6 +22,10 @@ export const handler = async (event) => {
 
   return {
     statusCode: 200,
-    body: JSON.stringify({ signal: result.signal.signal, evaluated_at: result.signal.evaluated_at }),
+    body: JSON.stringify({
+      signal: result.signal.signal,
+      shortTermSignal: result.shortTermSignal.signal,
+      evaluated_at: result.signal.evaluated_at,
+    }),
   }
 }

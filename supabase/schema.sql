@@ -34,10 +34,12 @@ create table if not exists market_snapshots (
 create index if not exists market_snapshots_symbol_fetched_at_idx
   on market_snapshots (symbol, fetched_at desc);
 
--- Rule-based signal, evaluated on a rolling 4-hour window
+-- Rule-based signal. timeframe distinguishes the 4-hour (structural) signal
+-- from the 1-hour (momentum) one -- same table, same accuracy tracking.
 create table if not exists signals (
   id bigint generated always as identity primary key,
   symbol text not null,
+  timeframe text not null default '4h',
   evaluated_at timestamptz not null,
   window_start timestamptz not null,
   window_end timestamptz not null,
@@ -51,8 +53,8 @@ create table if not exists signals (
   created_at timestamptz not null default now()
 );
 
-create index if not exists signals_symbol_evaluated_at_idx
-  on signals (symbol, evaluated_at desc);
+create index if not exists signals_symbol_timeframe_evaluated_at_idx
+  on signals (symbol, timeframe, evaluated_at desc);
 
 -- Fetcher writes with the service_role key (bypasses RLS).
 -- Frontend reads with the anon key, so allow public read-only access.

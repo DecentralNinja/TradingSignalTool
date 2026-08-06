@@ -17,7 +17,13 @@ import {
   getSnapshotPrice,
   saveSignalOutcome,
 } from './supabase.js'
-import { evaluateSignal, classifyVolatilityRegime, WINDOW_HOURS } from './signal.js'
+import {
+  evaluateSignal,
+  evaluateShortTermSignal,
+  classifyVolatilityRegime,
+  WINDOW_HOURS,
+  SHORT_WINDOW_HOURS,
+} from './signal.js'
 import { evaluateOutcome } from './accuracy.js'
 
 const SYMBOL = 'BTCUSDT'
@@ -66,11 +72,11 @@ async function fetchSnapshot(symbol) {
   }
 }
 
-// Signals from WINDOW_HOURS ago have had their window play out, so we can now
-// check whether they were actually right.
-async function scorePendingOutcomes(client, snapshot) {
-  const cutoff = new Date(Date.now() - WINDOW_HOURS * 60 * 60 * 1000).toISOString()
-  const pending = await getSignalsPendingOutcome(client, SYMBOL, cutoff)
+// Signals from windowHours ago (for this timeframe) have had their window
+// play out, so we can now check whether they were actually right.
+async function scorePendingOutcomes(client, timeframe, windowHours, snapshot) {
+  const cutoff = new Date(Date.now() - windowHours * 60 * 60 * 1000).toISOString()
+  const pending = await getSignalsPendingOutcome(client, SYMBOL, timeframe, cutoff)
   const scored = []
 
   for (const pendingSignal of pending) {
@@ -95,33 +101,63 @@ async function scorePendingOutcomes(client, snapshot) {
   return scored
 }
 
-// Runs one full cycle: fetch, save, evaluate the signal, score any signals
-// whose window has now played out. Shared by the CLI entry point and the
-// Lambda handler so the two never drift apart.
-export async function runFetchCycle(client) {
-  const snapshot = await fetchSnapshot(SYMBOL)
-  await saveSnapshot(client, snapshot)
-
-  const windowStart = new Date(Date.now() - WINDOW_HOURS * 60 * 60 * 1000).toISOString()
+// Evaluates one timeframe's signal, saves it, and scores whatever from that
+// same timeframe has aged out of its window. volatility tracking only applies
+// to the 4h structural signal (evaluateFn's return value simply won't include
+// it for the 1h one).
+async function runTimeframe(client, snapshot, { timeframe, windowHours, evaluateFn }) {
+  const windowStart = new Date(Date.now() - windowHours * 60 * 60 * 1000).toISOString()
   const windowSnapshots = await getRecentSnapshots(client, SYMBOL, windowStart)
-  const { signal, score, reason, volatility } = evaluateSignal(windowSnapshots)
+  const { signal, score, reason, volatility } = evaluateFn(windowSnapshots)
 
-  const recentVolatilities = await getRecentVolatilities(client, SYMBOL, 50)
-  const volatilityRegime = classifyVolatilityRegime(volatility, recentVolatilities)
+  let volatilityRegime = null
+  if (volatility !== undefined) {
+    const recentVolatilities = await getRecentVolatilities(client, SYMBOL, timeframe, 50)
+    volatilityRegime = classifyVolatilityRegime(volatility, recentVolatilities)
+  }
 
   const signalRow = {
     symbol: SYMBOL,
+    timeframe,
     evaluated_at: snapshot.fetched_at,
     window_start: windowStart,
     window_end: snapshot.fetched_at,
     signal,
     reason: `score ${score} (${windowSnapshots.length} snapshot${windowSnapshots.length === 1 ? '' : 's'} in window): ${reason}`,
-    volatility,
+    volatility: volatility ?? null,
     volatility_regime: volatilityRegime,
   }
 
   await saveSignal(client, signalRow)
-  const scoredOutcomes = await scorePendingOutcomes(client, snapshot)
+  const scoredOutcomes = await scorePendingOutcomes(client, timeframe, windowHours, snapshot)
 
-  return { snapshot, signal: signalRow, scoredOutcomes }
+  return { signal: signalRow, scoredOutcomes }
+}
+
+// Runs one full cycle: fetch, save, evaluate both the 4h and 1h signals, score
+// any signals whose window has now played out. Shared by the CLI entry point
+// and the Lambda handler so the two never drift apart.
+export async function runFetchCycle(client) {
+  const snapshot = await fetchSnapshot(SYMBOL)
+  await saveSnapshot(client, snapshot)
+
+  const structural = await runTimeframe(client, snapshot, {
+    timeframe: '4h',
+    windowHours: WINDOW_HOURS,
+    evaluateFn: evaluateSignal,
+  })
+
+  const momentum = await runTimeframe(client, snapshot, {
+    timeframe: '1h',
+    windowHours: SHORT_WINDOW_HOURS,
+    evaluateFn: evaluateShortTermSignal,
+  })
+
+  return {
+    snapshot,
+    signal: structural.signal,
+    scoredOutcomes: structural.scoredOutcomes,
+    shortTermSignal: momentum.signal,
+    shortTermScoredOutcomes: momentum.scoredOutcomes,
+  }
 }

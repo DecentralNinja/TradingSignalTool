@@ -10,11 +10,13 @@ async function main() {
     return
   }
 
-  const { snapshot, signal, scoredOutcomes } = await runFetchCycle(client)
+  const { snapshot, signal, scoredOutcomes, shortTermSignal, shortTermScoredOutcomes } =
+    await runFetchCycle(client)
   console.log(snapshot)
   console.log('Saved to Supabase.')
-  console.log('Signal:', signal)
-  for (const outcome of scoredOutcomes) {
+  console.log('4h Signal:', signal)
+  console.log('1h Signal:', shortTermSignal)
+  for (const outcome of [...scoredOutcomes, ...shortTermScoredOutcomes]) {
     console.log(
       `Scored signal ${outcome.id} (${outcome.signal}): ${outcome.correct ? 'correct' : 'incorrect'} (${outcome.priceChangePct.toFixed(2)}% move)`
     )

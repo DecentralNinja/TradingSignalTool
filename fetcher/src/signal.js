@@ -1,4 +1,5 @@
 export const WINDOW_HOURS = 4
+export const SHORT_WINDOW_HOURS = 1
 
 // Extreme, one-sided funding hints at a crowded trade and reversal risk (contrarian).
 function scoreFundingRate(rate) {
@@ -97,8 +98,25 @@ function scoreFearGreed(value) {
   return { score: 0, reason: null }
 }
 
+// These seven rules all read the latest snapshot's value directly rather than
+// anything averaged over a window, so they're identical regardless of which
+// timeframe's signal is being evaluated -- only the trend/momentum rules below
+// actually depend on window length.
+function latestValueRules(latest) {
+  return [
+    scoreFundingRate(latest.funding_rate),
+    scoreLongShortRatio(latest.long_short_ratio),
+    scoreTakerFlow(latest.taker_buy_sell_ratio),
+    scoreTopTraderRatio(latest.top_trader_long_short_ratio),
+    scoreBasis(latest.basis_rate),
+    scoreCrossExchangeFunding(latest.funding_rate, latest.bybit_funding_rate),
+    scoreFearGreed(latest.fear_greed_value),
+  ]
+}
+
 // Rising OI with rising price is a fresh trend; falling OI with rising price is
-// likely short covering (a weaker move), and vice versa.
+// likely short covering (a weaker move), and vice versa. Thresholds sized for
+// a 4-hour window's typical cumulative movement.
 function scoreOpenInterestTrend(priceChangePct, oiChangePct) {
   const priceUp = priceChangePct > 0.5
   const priceDown = priceChangePct < -0.5
@@ -118,6 +136,50 @@ function scoreOpenInterestTrend(priceChangePct, oiChangePct) {
     return { score: 1, reason: `price down ${priceChangePct.toFixed(2)}% but OI down ${oiChangePct.toFixed(2)}% (likely long liquidation exhaustion)` }
   }
   return { score: 0, reason: null }
+}
+
+// Short-term price momentum -- a new rule, since nothing else measures
+// unaveraged short-window price movement. Thresholds are a starting guess
+// scaled down from the 4h rule's, not yet backtested.
+function scorePriceMomentum(priceChangePct) {
+  if (priceChangePct > 0.25) {
+    return { score: 1, reason: `price up ${priceChangePct.toFixed(2)}% in the last hour (momentum)` }
+  }
+  if (priceChangePct < -0.25) {
+    return { score: -1, reason: `price down ${priceChangePct.toFixed(2)}% in the last hour (momentum)` }
+  }
+  return { score: 0, reason: null }
+}
+
+// Short-term OI momentum -- same idea as the 4h OI-trend rule but standalone
+// (not cross-referenced with price direction), with smaller thresholds sized
+// for an hour instead of four.
+function scoreOpenInterestMomentum(oiChangePct) {
+  if (oiChangePct > 1) {
+    return { score: 1, reason: `open interest up ${oiChangePct.toFixed(2)}% in the last hour` }
+  }
+  if (oiChangePct < -1) {
+    return { score: -1, reason: `open interest down ${oiChangePct.toFixed(2)}% in the last hour` }
+  }
+  return { score: 0, reason: null }
+}
+
+function scoreToSignal(totalScore) {
+  if (totalScore >= 2) return 'bullish'
+  if (totalScore <= -2) return 'bearish'
+  return 'neutral'
+}
+
+function summarize(rules, extra = {}) {
+  const totalScore = rules.reduce((sum, r) => sum + r.score, 0)
+  const reasons = rules.filter((r) => r.reason).map((r) => r.reason)
+
+  return {
+    signal: scoreToSignal(totalScore),
+    score: totalScore,
+    reason: reasons.length > 0 ? reasons.join('; ') : 'no rules triggered',
+    ...extra,
+  }
 }
 
 // Standard deviation of log returns between consecutive snapshots in the window —
@@ -152,36 +214,37 @@ export function classifyVolatilityRegime(currentVolatility, recentVolatilities) 
   return 'normal'
 }
 
-// snapshots must be sorted ascending by fetched_at and cover the rolling window.
-export function evaluateSignal(snapshots) {
+function priceAndOiChange(snapshots) {
   const earliest = snapshots[0]
   const latest = snapshots[snapshots.length - 1]
+  return {
+    priceChangePct: ((latest.mark_price - earliest.mark_price) / earliest.mark_price) * 100,
+    oiChangePct: ((latest.open_interest - earliest.open_interest) / earliest.open_interest) * 100,
+  }
+}
 
-  const priceChangePct = ((latest.mark_price - earliest.mark_price) / earliest.mark_price) * 100
-  const oiChangePct = ((latest.open_interest - earliest.open_interest) / earliest.open_interest) * 100
+// The original structural signal: latest-value rules plus the OI-vs-price
+// trend rule, evaluated over a 4-hour window.
+export function evaluateSignal(snapshots) {
+  const latest = snapshots[snapshots.length - 1]
+  const { priceChangePct, oiChangePct } = priceAndOiChange(snapshots)
+
+  const rules = [...latestValueRules(latest), scoreOpenInterestTrend(priceChangePct, oiChangePct)]
+
+  return summarize(rules, { volatility: computeRealizedVolatility(snapshots) })
+}
+
+// The faster momentum signal: the same latest-value rules plus two rules that
+// specifically measure short-window price/OI movement, evaluated over 1 hour.
+export function evaluateShortTermSignal(snapshots) {
+  const latest = snapshots[snapshots.length - 1]
+  const { priceChangePct, oiChangePct } = priceAndOiChange(snapshots)
 
   const rules = [
-    scoreFundingRate(latest.funding_rate),
-    scoreLongShortRatio(latest.long_short_ratio),
-    scoreTakerFlow(latest.taker_buy_sell_ratio),
-    scoreOpenInterestTrend(priceChangePct, oiChangePct),
-    scoreTopTraderRatio(latest.top_trader_long_short_ratio),
-    scoreBasis(latest.basis_rate),
-    scoreCrossExchangeFunding(latest.funding_rate, latest.bybit_funding_rate),
-    scoreFearGreed(latest.fear_greed_value),
+    ...latestValueRules(latest),
+    scorePriceMomentum(priceChangePct),
+    scoreOpenInterestMomentum(oiChangePct),
   ]
 
-  const totalScore = rules.reduce((sum, r) => sum + r.score, 0)
-  const reasons = rules.filter((r) => r.reason).map((r) => r.reason)
-
-  let signal = 'neutral'
-  if (totalScore >= 2) signal = 'bullish'
-  else if (totalScore <= -2) signal = 'bearish'
-
-  return {
-    signal,
-    score: totalScore,
-    reason: reasons.length > 0 ? reasons.join('; ') : 'no rules triggered',
-    volatility: computeRealizedVolatility(snapshots),
-  }
+  return summarize(rules)
 }

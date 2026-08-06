@@ -51,12 +51,13 @@ export async function saveSignal(client, signalRow) {
   })
 }
 
-export async function getRecentVolatilities(client, symbol, limit) {
+export async function getRecentVolatilities(client, symbol, timeframe, limit) {
   return withRetry(async () => {
     const { data, error } = await client
       .from('signals')
       .select('volatility')
       .eq('symbol', symbol)
+      .eq('timeframe', timeframe)
       .not('volatility', 'is', null)
       .order('evaluated_at', { ascending: false })
       .limit(limit)
@@ -70,12 +71,13 @@ export async function getRecentVolatilities(client, symbol, limit) {
 }
 
 // Signals old enough for their window to have played out, but not yet scored.
-export async function getSignalsPendingOutcome(client, symbol, cutoff) {
+export async function getSignalsPendingOutcome(client, symbol, timeframe, cutoff) {
   return withRetry(async () => {
     const { data, error } = await client
       .from('signals')
       .select('id, evaluated_at, signal')
       .eq('symbol', symbol)
+      .eq('timeframe', timeframe)
       .is('outcome_correct', null)
       .lte('evaluated_at', cutoff)
       .order('evaluated_at', { ascending: true })
