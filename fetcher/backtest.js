@@ -235,8 +235,16 @@ function backtestTimeframe(snapshots, windowHours, evaluateFn, label) {
 
     if (outcomeIndex === -1) continue
 
-    const { correct } = evaluateOutcome(signal, snapshots[i].mark_price, snapshots[outcomeIndex].mark_price)
-    results.push({ signal, correct, rules })
+    const { correct, priceChangePct } = evaluateOutcome(
+      signal,
+      snapshots[i].mark_price,
+      snapshots[outcomeIndex].mark_price
+    )
+    // Trade return if you'd acted on the call: long on bullish (profits when
+    // price rises), short on bearish (profits when price falls) -- so bearish
+    // flips the sign of the raw price move.
+    const tradeReturnPct = signal === 'bearish' ? -priceChangePct : priceChangePct
+    results.push({ signal, correct, rules, tradeReturnPct })
   }
 
   // Counts distinct episodes rather than raw 15-min ticks: four consecutive
@@ -268,6 +276,29 @@ function backtestTimeframe(snapshots, windowHours, evaluateFn, label) {
 
   reportRuleBreakdown(results, 'bearish')
   reportRuleBreakdown(results, 'bullish')
+  reportExpectancy(results, 'bullish')
+  reportExpectancy(results, 'bearish')
+}
+
+// Expectancy: the average return per trade if every call were acted on with
+// equal size, no leverage, before fees/slippage. This is what "58% accurate"
+// actually needs to mean anything financially -- a high win rate with tiny
+// wins and large losses can still lose money overall, and vice versa.
+function reportExpectancy(results, signalType) {
+  const trades = results.filter((r) => r.signal === signalType)
+  if (trades.length === 0) return
+
+  const wins = trades.filter((t) => t.tradeReturnPct > 0)
+  const losses = trades.filter((t) => t.tradeReturnPct <= 0)
+  const avgWin = wins.length > 0 ? wins.reduce((s, t) => s + t.tradeReturnPct, 0) / wins.length : 0
+  const avgLoss = losses.length > 0 ? losses.reduce((s, t) => s + t.tradeReturnPct, 0) / losses.length : 0
+  const avgReturn = trades.reduce((s, t) => s + t.tradeReturnPct, 0) / trades.length
+  const winRate = (wins.length / trades.length) * 100
+
+  console.log(`  -- ${signalType} expectancy (before fees/slippage, no leverage, equal size) --`)
+  console.log(`     win rate: ${winRate.toFixed(1)}% (${wins.length}/${trades.length})`)
+  console.log(`     avg win: +${avgWin.toFixed(3)}%   avg loss: ${avgLoss.toFixed(3)}%`)
+  console.log(`     average return per trade: ${avgReturn >= 0 ? '+' : ''}${avgReturn.toFixed(3)}%`)
 }
 
 async function main() {
