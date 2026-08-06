@@ -12,8 +12,18 @@ function percentChange(current, previous) {
 }
 
 function App() {
-  const { latestSnapshot, previousSnapshot, latestSignal, signalHistory, accuracy, loading, error } =
-    useDashboardData()
+  const {
+    latestSnapshot,
+    previousSnapshot,
+    latestSignal,
+    signalHistory,
+    accuracy,
+    latestShortTermSignal,
+    shortTermSignalHistory,
+    shortTermAccuracy,
+    loading,
+    error,
+  } = useDashboardData()
 
   if (loading) {
     return (
@@ -53,7 +63,13 @@ function App() {
       </section>
 
       <section className="app__section">
+        <h2>4-Hour Signal</h2>
         <SignalBanner signal={latestSignal} />
+      </section>
+
+      <section className="app__section">
+        <h2>1-Hour Signal</h2>
+        <SignalBanner signal={latestShortTermSignal} />
       </section>
 
       <section className="app__section app__metrics">
@@ -90,13 +106,23 @@ function App() {
       </section>
 
       <section className="app__section">
-        <h2>Signal accuracy</h2>
+        <h2>4-Hour Signal Accuracy</h2>
         <AccuracyStats accuracy={accuracy} />
       </section>
 
       <section className="app__section">
-        <h2>Signal history</h2>
+        <h2>1-Hour Signal Accuracy</h2>
+        <AccuracyStats accuracy={shortTermAccuracy} />
+      </section>
+
+      <section className="app__section">
+        <h2>4-Hour Signal History</h2>
         <SignalHistory history={signalHistory} />
+      </section>
+
+      <section className="app__section">
+        <h2>1-Hour Signal History</h2>
+        <SignalHistory history={shortTermSignalHistory} />
       </section>
     </div>
   )

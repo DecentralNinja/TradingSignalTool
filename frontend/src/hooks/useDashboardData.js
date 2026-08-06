@@ -18,49 +18,76 @@ function computeAccuracy(scoredSignals) {
   return byType
 }
 
+function signalsForTimeframe(timeframe, limit) {
+  return supabase
+    .from('signals')
+    .select('*')
+    .eq('symbol', SYMBOL)
+    .eq('timeframe', timeframe)
+    .order('evaluated_at', { ascending: false })
+    .limit(limit)
+}
+
+function accuracyForTimeframe(timeframe) {
+  return supabase
+    .from('signals')
+    .select('signal, outcome_correct')
+    .eq('symbol', SYMBOL)
+    .eq('timeframe', timeframe)
+    .not('outcome_correct', 'is', null)
+}
+
 export function useDashboardData() {
   const [latestSnapshot, setLatestSnapshot] = useState(null)
   const [previousSnapshot, setPreviousSnapshot] = useState(null)
   const [latestSignal, setLatestSignal] = useState(null)
   const [signalHistory, setSignalHistory] = useState([])
   const [accuracy, setAccuracy] = useState(null)
+  const [latestShortTermSignal, setLatestShortTermSignal] = useState(null)
+  const [shortTermSignalHistory, setShortTermSignalHistory] = useState([])
+  const [shortTermAccuracy, setShortTermAccuracy] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
 
   const fetchData = useCallback(async () => {
     try {
-      const [snapshotsResult, signalHistoryResult, accuracyResult] = await Promise.all([
+      const [
+        snapshotsResult,
+        signalHistoryResult,
+        accuracyResult,
+        shortTermHistoryResult,
+        shortTermAccuracyResult,
+      ] = await Promise.all([
         supabase
           .from('market_snapshots')
           .select('*')
           .eq('symbol', SYMBOL)
           .order('fetched_at', { ascending: false })
           .limit(2),
-        supabase
-          .from('signals')
-          .select('*')
-          .eq('symbol', SYMBOL)
-          .order('evaluated_at', { ascending: false })
-          .limit(HISTORY_LIMIT),
-        supabase
-          .from('signals')
-          .select('signal, outcome_correct')
-          .eq('symbol', SYMBOL)
-          .not('outcome_correct', 'is', null),
+        signalsForTimeframe('4h', HISTORY_LIMIT),
+        accuracyForTimeframe('4h'),
+        signalsForTimeframe('1h', HISTORY_LIMIT),
+        accuracyForTimeframe('1h'),
       ])
 
       if (snapshotsResult.error) throw snapshotsResult.error
       if (signalHistoryResult.error) throw signalHistoryResult.error
       if (accuracyResult.error) throw accuracyResult.error
+      if (shortTermHistoryResult.error) throw shortTermHistoryResult.error
+      if (shortTermAccuracyResult.error) throw shortTermAccuracyResult.error
 
       const [latest, previous] = snapshotsResult.data ?? []
       const history = signalHistoryResult.data ?? []
+      const shortTermHistory = shortTermHistoryResult.data ?? []
 
       setLatestSnapshot(latest ?? null)
       setPreviousSnapshot(previous ?? null)
       setLatestSignal(history[0] ?? null)
       setSignalHistory(history)
       setAccuracy(computeAccuracy(accuracyResult.data ?? []))
+      setLatestShortTermSignal(shortTermHistory[0] ?? null)
+      setShortTermSignalHistory(shortTermHistory)
+      setShortTermAccuracy(computeAccuracy(shortTermAccuracyResult.data ?? []))
       setError(null)
     } catch (err) {
       setError(err.message)
@@ -75,5 +102,16 @@ export function useDashboardData() {
     return () => clearInterval(interval)
   }, [fetchData])
 
-  return { latestSnapshot, previousSnapshot, latestSignal, signalHistory, accuracy, loading, error }
+  return {
+    latestSnapshot,
+    previousSnapshot,
+    latestSignal,
+    signalHistory,
+    accuracy,
+    latestShortTermSignal,
+    shortTermSignalHistory,
+    shortTermAccuracy,
+    loading,
+    error,
+  }
 }
