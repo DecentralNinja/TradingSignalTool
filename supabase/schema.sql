@@ -45,6 +45,8 @@ create table if not exists signals (
   window_end timestamptz not null,
   signal text not null check (signal in ('bullish', 'bearish', 'neutral')),
   reason text,
+  combo text,
+  confidence text,
   volatility numeric,
   volatility_regime text,
   outcome_price numeric,

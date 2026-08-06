@@ -42,7 +42,17 @@ export function SignalBanner({ signal }) {
         {meta.icon}
       </span>
       <div>
-        <div className="signal-banner__label">{meta.label}</div>
+        <div className="signal-banner__label">
+          {meta.label}
+          {signal.confidence === 'proven' && (
+            <span className="signal-banner__confidence signal-banner__confidence--proven">Proven</span>
+          )}
+          {signal.confidence === 'experimental' && (
+            <span className="signal-banner__confidence signal-banner__confidence--experimental">
+              Experimental
+            </span>
+          )}
+        </div>
         <p className="signal-banner__reason">{signal.reason}</p>
         <p className="signal-banner__timestamp">
           as of {formatDateTime(signal.evaluated_at)}

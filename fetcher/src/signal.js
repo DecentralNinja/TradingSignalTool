@@ -185,15 +185,51 @@ function scoreToSignal(totalScore) {
   return 'neutral'
 }
 
-function summarize(rules, extra = {}) {
+// Which specific rules fired (not just how many), as a stable key for looking
+// up whether this exact combination has shown real edge in backtesting.
+export function combinationKey(rules) {
+  const fired = rules
+    .filter((r) => r.score !== 0)
+    .map((r) => r.rule)
+    .sort()
+  return fired.length > 0 ? fired.join('+') : 'none'
+}
+
+// Combinations shown to have positive NET expectancy (after an estimated
+// 0.10% round-trip fee) in the 30-day backtest run on 2026-08-06 -- see
+// backtest.js. Everything not listed here is "experimental": it's a real
+// rule-based call, just not yet backed by evidence that it makes money after
+// costs. Re-derive this whenever backtest.js is rerun with fresh data.
+const PROVEN_COMBOS = {
+  '4h': {
+    bullish: ['fear_greed+taker_flow'],
+    bearish: [],
+  },
+  '1h': {
+    bullish: [],
+    bearish: [],
+  },
+}
+
+function getConfidence(timeframe, signal, combo) {
+  if (signal !== 'bullish' && signal !== 'bearish') return null
+  const proven = PROVEN_COMBOS[timeframe]?.[signal] ?? []
+  return proven.includes(combo) ? 'proven' : 'experimental'
+}
+
+function summarize(rules, timeframe, extra = {}) {
   const totalScore = rules.reduce((sum, r) => sum + r.score, 0)
   const reasons = rules.filter((r) => r.reason).map((r) => r.reason)
+  const signal = scoreToSignal(totalScore)
+  const combo = combinationKey(rules)
 
   return {
-    signal: scoreToSignal(totalScore),
+    signal,
     score: totalScore,
     reason: reasons.length > 0 ? reasons.join('; ') : 'no rules triggered',
     rules,
+    combo,
+    confidence: getConfidence(timeframe, signal, combo),
     ...extra,
   }
 }
@@ -247,7 +283,7 @@ export function evaluateSignal(snapshots) {
 
   const rules = [...latestValueRules(latest), scoreOpenInterestTrend(priceChangePct, oiChangePct)]
 
-  return summarize(rules, { volatility: computeRealizedVolatility(snapshots) })
+  return summarize(rules, '4h', { volatility: computeRealizedVolatility(snapshots) })
 }
 
 // The faster momentum signal: the same latest-value rules plus two rules that
@@ -262,5 +298,5 @@ export function evaluateShortTermSignal(snapshots) {
     scoreOpenInterestMomentum(oiChangePct),
   ]
 
-  return summarize(rules)
+  return summarize(rules, '1h')
 }

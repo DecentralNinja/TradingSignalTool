@@ -36,6 +36,27 @@
     font-size: 22px;
     font-weight: 600;
     color: var(--text-primary);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  &__confidence {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 3px 8px;
+    border-radius: 999px;
+
+    &--proven {
+      background: var(--status-good);
+      color: #fff;
+    }
+    &--experimental {
+      background: var(--status-neutral);
+      color: #fff;
+    }
   }
 
   &__reason {

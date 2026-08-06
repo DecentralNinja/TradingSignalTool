@@ -108,7 +108,7 @@ async function scorePendingOutcomes(client, timeframe, windowHours, snapshot) {
 async function runTimeframe(client, snapshot, { timeframe, windowHours, evaluateFn }) {
   const windowStart = new Date(Date.now() - windowHours * 60 * 60 * 1000).toISOString()
   const windowSnapshots = await getRecentSnapshots(client, SYMBOL, windowStart)
-  const { signal, score, reason, volatility } = evaluateFn(windowSnapshots)
+  const { signal, score, reason, volatility, combo, confidence } = evaluateFn(windowSnapshots)
 
   let volatilityRegime = null
   if (volatility !== undefined) {
@@ -124,6 +124,8 @@ async function runTimeframe(client, snapshot, { timeframe, windowHours, evaluate
     window_end: snapshot.fetched_at,
     signal,
     reason: `score ${score} (${windowSnapshots.length} snapshot${windowSnapshots.length === 1 ? '' : 's'} in window): ${reason}`,
+    combo,
+    confidence,
     volatility: volatility ?? null,
     volatility_regime: volatilityRegime,
   }

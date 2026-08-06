@@ -17,6 +17,14 @@ const DAYS_BACK = 30
 const INTERVAL_MS = 15 * 60 * 1000
 const PACE_MS = 200
 
+// Binance USDT-M futures taker fee, VIP 0 tier -- charged on both entry and
+// exit, so round-trip is double. Excludes funding payments (varies with hold
+// time and side, harder to model precisely) and slippage, so real cost is
+// likely somewhat higher than this -- treat as a floor, not a ceiling.
+const TAKER_FEE_PCT = 0.05
+const ROUND_TRIP_FEE_PCT = TAKER_FEE_PCT * 2
+const MIN_COMBO_SAMPLE = 5
+
 async function fetchJson(url) {
   const res = await fetch(url)
   if (!res.ok) {
@@ -227,7 +235,7 @@ function backtestTimeframe(snapshots, windowHours, evaluateFn, label) {
     const window = windowSlice(snapshots, i, windowHours)
     if (window.length < 2) continue
 
-    const { signal, rules } = evaluateFn(window)
+    const { signal, rules, combo } = evaluateFn(window)
     const evaluatedAtMs = new Date(snapshots[i].fetched_at).getTime()
     const outcomeIndex = snapshots.findIndex(
       (s) => new Date(s.fetched_at).getTime() >= evaluatedAtMs + windowHours * 60 * 60 * 1000
@@ -244,7 +252,8 @@ function backtestTimeframe(snapshots, windowHours, evaluateFn, label) {
     // price rises), short on bearish (profits when price falls) -- so bearish
     // flips the sign of the raw price move.
     const tradeReturnPct = signal === 'bearish' ? -priceChangePct : priceChangePct
-    results.push({ signal, correct, rules, tradeReturnPct })
+    const netReturnPct = tradeReturnPct - ROUND_TRIP_FEE_PCT
+    results.push({ signal, correct, rules, tradeReturnPct, netReturnPct, combo })
   }
 
   // Counts distinct episodes rather than raw 15-min ticks: four consecutive
@@ -278,12 +287,16 @@ function backtestTimeframe(snapshots, windowHours, evaluateFn, label) {
   reportRuleBreakdown(results, 'bullish')
   reportExpectancy(results, 'bullish')
   reportExpectancy(results, 'bearish')
+  reportCombinations(results, 'bullish')
+  reportCombinations(results, 'bearish')
 }
 
 // Expectancy: the average return per trade if every call were acted on with
-// equal size, no leverage, before fees/slippage. This is what "58% accurate"
-// actually needs to mean anything financially -- a high win rate with tiny
-// wins and large losses can still lose money overall, and vice versa.
+// equal size, no leverage. Gross is before fees; net subtracts an estimated
+// round-trip taker fee (funding payments and slippage still excluded, so
+// real-world net is likely somewhat worse than this). Gross accuracy alone
+// doesn't say whether a signal makes money -- a high win rate with tiny wins
+// and large losses can still lose, and this is what actually answers that.
 function reportExpectancy(results, signalType) {
   const trades = results.filter((r) => r.signal === signalType)
   if (trades.length === 0) return
@@ -293,12 +306,52 @@ function reportExpectancy(results, signalType) {
   const avgWin = wins.length > 0 ? wins.reduce((s, t) => s + t.tradeReturnPct, 0) / wins.length : 0
   const avgLoss = losses.length > 0 ? losses.reduce((s, t) => s + t.tradeReturnPct, 0) / losses.length : 0
   const avgReturn = trades.reduce((s, t) => s + t.tradeReturnPct, 0) / trades.length
+  const avgNetReturn = trades.reduce((s, t) => s + t.netReturnPct, 0) / trades.length
+  const netWinRate = (trades.filter((t) => t.netReturnPct > 0).length / trades.length) * 100
   const winRate = (wins.length / trades.length) * 100
 
-  console.log(`  -- ${signalType} expectancy (before fees/slippage, no leverage, equal size) --`)
-  console.log(`     win rate: ${winRate.toFixed(1)}% (${wins.length}/${trades.length})`)
-  console.log(`     avg win: +${avgWin.toFixed(3)}%   avg loss: ${avgLoss.toFixed(3)}%`)
-  console.log(`     average return per trade: ${avgReturn >= 0 ? '+' : ''}${avgReturn.toFixed(3)}%`)
+  console.log(`  -- ${signalType} expectancy (no leverage, equal size) --`)
+  console.log(`     gross win rate: ${winRate.toFixed(1)}% (${wins.length}/${trades.length})`)
+  console.log(`     gross avg win: +${avgWin.toFixed(3)}%   avg loss: ${avgLoss.toFixed(3)}%`)
+  console.log(`     gross average return per trade: ${avgReturn >= 0 ? '+' : ''}${avgReturn.toFixed(3)}%`)
+  console.log(
+    `     NET (after ~${ROUND_TRIP_FEE_PCT.toFixed(2)}% round-trip fee) win rate: ${netWinRate.toFixed(1)}%, avg return: ${avgNetReturn >= 0 ? '+' : ''}${avgNetReturn.toFixed(3)}%`
+  )
+}
+
+// Which specific rule combinations, when they're what's actually driving a
+// call, have real proven edge -- vs. which just happen to co-occur without
+// adding anything. Filtered to combos with enough samples to mean something.
+function reportCombinations(results, signalType) {
+  const trades = results.filter((r) => r.signal === signalType)
+  if (trades.length === 0) return
+
+  const byCombo = {}
+  for (const t of trades) {
+    byCombo[t.combo] = byCombo[t.combo] || []
+    byCombo[t.combo].push(t)
+  }
+
+  const rows = Object.entries(byCombo)
+    .filter(([, group]) => group.length >= MIN_COMBO_SAMPLE)
+    .map(([combo, group]) => {
+      const winRate = (group.filter((t) => t.correct).length / group.length) * 100
+      const avgNetReturn = group.reduce((s, t) => s + t.netReturnPct, 0) / group.length
+      return { combo, count: group.length, winRate, avgNetReturn }
+    })
+    .sort((a, b) => b.avgNetReturn - a.avgNetReturn)
+
+  if (rows.length === 0) {
+    console.log(`  -- ${signalType} combinations: none with >= ${MIN_COMBO_SAMPLE} samples --`)
+    return
+  }
+
+  console.log(`  -- ${signalType} combinations by net expectancy (min ${MIN_COMBO_SAMPLE} samples) --`)
+  for (const r of rows) {
+    console.log(
+      `     [${r.avgNetReturn >= 0 ? '+' : ''}${r.avgNetReturn.toFixed(3)}% net/trade] ${r.combo} (n=${r.count}, ${r.winRate.toFixed(1)}% win rate)`
+    )
+  }
 }
 
 async function main() {
