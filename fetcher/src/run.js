@@ -8,6 +8,7 @@ import {
 } from './binance.js'
 import { getTicker as getBybitTicker, getLongShortRatio as getBybitLongShortRatio } from './bybit.js'
 import { getFearGreedIndex } from './fearGreed.js'
+import { getLeveragedFundsPositioning } from './cftc.js'
 import {
   saveSnapshot,
   getRecentSnapshots,
@@ -29,7 +30,7 @@ import { evaluateOutcome } from './accuracy.js'
 const SYMBOL = 'BTCUSDT'
 
 async function fetchSnapshot(symbol) {
-  const [price, oi, longShort, takerVol, topTrader, basis, bybitTicker, bybitLongShort, fearGreed] =
+  const [price, oi, longShort, takerVol, topTrader, basis, bybitTicker, bybitLongShort, fearGreed, cftc] =
     await Promise.all([
       getMarkPriceAndFunding(symbol),
       getOpenInterest(symbol),
@@ -40,6 +41,7 @@ async function fetchSnapshot(symbol) {
       getBybitTicker(symbol),
       getBybitLongShortRatio(symbol),
       getFearGreedIndex(),
+      getLeveragedFundsPositioning(),
     ])
 
   return {
@@ -69,6 +71,10 @@ async function fetchSnapshot(symbol) {
     bybit_long_short_ratio: bybitLongShort.longShortRatio,
     fear_greed_value: fearGreed.value,
     fear_greed_classification: fearGreed.classification,
+    cftc_report_date: new Date(cftc.reportDate).toISOString(),
+    cftc_lev_funds_long: cftc.leveragedFundsLong,
+    cftc_lev_funds_short: cftc.leveragedFundsShort,
+    cftc_lev_funds_long_short_ratio: cftc.leveragedFundsLongShortRatio,
   }
 }
 

@@ -103,6 +103,15 @@ function App() {
           value={latestSnapshot?.fear_greed_value != null ? `${latestSnapshot.fear_greed_value}` : '—'}
           delta={latestSnapshot?.fear_greed_classification ?? null}
         />
+        <StatTile
+          label="CFTC leveraged funds L/S"
+          value={formatRatio(latestSnapshot?.cftc_lev_funds_long_short_ratio)}
+          delta={
+            latestSnapshot?.cftc_report_date
+              ? `as of ${formatDateTime(latestSnapshot.cftc_report_date)}`
+              : null
+          }
+        />
       </section>
 
       <section className="app__section">

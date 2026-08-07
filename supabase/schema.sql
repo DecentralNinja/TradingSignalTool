@@ -27,6 +27,10 @@ create table if not exists market_snapshots (
   bybit_long_short_ratio numeric,
   fear_greed_value numeric,
   fear_greed_classification text,
+  cftc_report_date timestamptz,
+  cftc_lev_funds_long numeric,
+  cftc_lev_funds_short numeric,
+  cftc_lev_funds_long_short_ratio numeric,
   created_at timestamptz not null default now(),
   unique (symbol, fetched_at)
 );
