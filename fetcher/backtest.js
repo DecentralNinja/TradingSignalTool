@@ -15,7 +15,9 @@ const SYMBOL = 'BTCUSDT'
 const BASE = 'https://fapi.binance.com'
 const DAYS_BACK = 30
 const INTERVAL_MS = 15 * 60 * 1000
-const PACE_MS = 200
+// Bumped from 200ms after a real ban: pagination across 6+ endpoints in quick
+// succession triggered Binance's rate limiter even on a clean IP.
+const PACE_MS = 1000
 
 // Binance USDT-M futures taker fee, VIP 0 tier -- charged on both entry and
 // exit, so round-trip is double. Excludes funding payments (varies with hold
@@ -90,6 +92,7 @@ async function fetchAllHistoricalData() {
     startTime,
     endTime
   )
+  await sleep(PACE_MS)
 
   console.log('Fetching long/short ratio history...')
   const longShort = await fetchPaginated(
@@ -98,6 +101,7 @@ async function fetchAllHistoricalData() {
     startTime,
     endTime
   )
+  await sleep(PACE_MS)
 
   console.log('Fetching top trader ratio history...')
   const topTrader = await fetchPaginated(
@@ -106,6 +110,7 @@ async function fetchAllHistoricalData() {
     startTime,
     endTime
   )
+  await sleep(PACE_MS)
 
   console.log('Fetching taker flow history...')
   const takerFlow = await fetchPaginated(
@@ -113,6 +118,7 @@ async function fetchAllHistoricalData() {
     startTime,
     endTime
   )
+  await sleep(PACE_MS)
 
   console.log('Fetching basis history...')
   const basis = await fetchPaginated(
