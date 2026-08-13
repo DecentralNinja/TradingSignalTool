@@ -118,3 +118,14 @@ export async function saveSignalOutcome(client, signalId, outcome) {
     }
   })
 }
+
+export async function saveLiquidationClusters(client, rows) {
+  if (rows.length === 0) return
+  await withRetry(async () => {
+    const { error } = await client.from('liquidation_clusters').insert(rows)
+
+    if (error) {
+      throw new Error(`Failed to save liquidation clusters: ${error.message}`)
+    }
+  })
+}

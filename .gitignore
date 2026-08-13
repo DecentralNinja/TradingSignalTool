@@ -5,3 +5,5 @@ dist/
 actions-runner/
 lambda-deploy/
 lambda-deploy.zip
+fetcher/.backtest-cache/
+fetcher/backtest-run.log

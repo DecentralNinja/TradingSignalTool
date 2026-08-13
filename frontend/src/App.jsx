@@ -4,6 +4,7 @@ import { SignalBanner } from './components/SignalBanner'
 import { StatTile } from './components/StatTile'
 import { SignalHistory } from './components/SignalHistory'
 import { AccuracyStats } from './components/AccuracyStats'
+import { LiquidationClusters } from './components/LiquidationClusters'
 import { formatDateTime, formatPercent, formatPrice, formatRatio } from './lib/format'
 
 function percentChange(current, previous) {
@@ -21,6 +22,7 @@ function App() {
     latestShortTermSignal,
     shortTermSignalHistory,
     shortTermAccuracy,
+    liquidationClusters,
     loading,
     error,
   } = useDashboardData()
@@ -112,6 +114,11 @@ function App() {
               : null
           }
         />
+      </section>
+
+      <section className="app__section">
+        <h2>Estimated Liquidation Clusters</h2>
+        <LiquidationClusters clusters={liquidationClusters} currentPrice={latestSnapshot?.mark_price} />
       </section>
 
       <section className="app__section">

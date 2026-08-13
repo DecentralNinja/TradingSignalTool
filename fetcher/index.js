@@ -10,7 +10,7 @@ async function main() {
     return
   }
 
-  const { snapshot, signal, scoredOutcomes, shortTermSignal, shortTermScoredOutcomes } =
+  const { snapshot, signal, scoredOutcomes, shortTermSignal, shortTermScoredOutcomes, liquidationClusters } =
     await runFetchCycle(client)
   console.log(snapshot)
   console.log('Saved to Supabase.')
@@ -21,6 +21,7 @@ async function main() {
       `Scored signal ${outcome.id} (${outcome.signal}): ${outcome.correct ? 'correct' : 'incorrect'} (${outcome.priceChangePct.toFixed(2)}% move)`
     )
   }
+  console.log('Liquidation clusters:', liquidationClusters)
 }
 
 main().catch((err) => {

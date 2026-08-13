@@ -151,23 +151,23 @@ function scoreOpenInterestTrend(priceChangePct, oiChangePct) {
   return { rule, score: 0, reason: null }
 }
 
-// Short-term price momentum -- a new rule, since nothing else measures
-// unaveraged short-window price movement. Thresholds are a starting guess
-// scaled down from the 4h rule's, not yet backtested.
-function scorePriceMomentum(priceChangePct) {
-  const rule = 'price_momentum'
-  if (priceChangePct > 0.25) {
-    return { rule, score: 1, reason: `price up ${priceChangePct.toFixed(2)}% in the last hour (momentum)` }
-  }
-  if (priceChangePct < -0.25) {
-    return { rule, score: -1, reason: `price down ${priceChangePct.toFixed(2)}% in the last hour (momentum)` }
-  }
-  return { rule, score: 0, reason: null }
-}
+// price_momentum (raw hourly price change, +-0.25% threshold) was removed
+// after backtesting: it was the dominant combo in 75-90% of all 1h calls and
+// net-negative after fees in BOTH directions -- continuation 47.3% win rate
+// (net -0.114%) and reversal 52.6% (net -0.086%), tested standalone at
+// 2026-08-13. Gating it to only fire in 'elevated' volatility regimes didn't
+// fix it either (bearish net got worse, -0.082% vs -0.060% ungated) -- the
+// problem isn't noise-during-chop, raw 1h price change just doesn't predict
+// the next hour's direction at all. Not brought back without a genuinely
+// different formulation and a backtest showing real edge.
 
 // Short-term OI momentum -- same idea as the 4h OI-trend rule but standalone
 // (not cross-referenced with price direction), with smaller thresholds sized
-// for an hour instead of four.
+// for an hour instead of four. Backtested standalone at the >1% threshold:
+// 61.6% win rate, gross +0.092%, but net -0.008% after fees (n=99) -- close
+// to real edge but not proven yet. A threshold sweep (>2%: 75% win/n=12,
+// >3%: 80% win/n=5) trends positive but those samples are too small to trust
+// -- re-check as more history accumulates before raising the threshold.
 function scoreOpenInterestMomentum(oiChangePct) {
   const rule = 'oi_momentum'
   if (oiChangePct > 1) {
@@ -196,18 +196,23 @@ export function combinationKey(rules) {
 }
 
 // Combinations shown to have positive NET expectancy (after an estimated
-// 0.10% round-trip fee) in the 30-day backtest run on 2026-08-06 -- see
+// 0.10% round-trip fee) in the 30-day backtest run on 2026-08-13 -- see
 // backtest.js. Everything not listed here is "experimental": it's a real
 // rule-based call, just not yet backed by evidence that it makes money after
 // costs. Re-derive this whenever backtest.js is rerun with fresh data.
-const PROVEN_COMBOS = {
+//
+// 1h entries are new as of this run, only after price_momentum (a net-losing
+// rule that dominated 75-90% of all 1h calls) was removed -- sample sizes
+// are thinner than the 4h combo (n=13-26 vs n=30), so treat these as real
+// but less battle-tested; re-verify once more live history accumulates.
+export const PROVEN_COMBOS = {
   '4h': {
     bullish: ['fear_greed+taker_flow'],
     bearish: [],
   },
   '1h': {
-    bullish: [],
-    bearish: [],
+    bullish: ['fear_greed+taker_flow', 'oi_momentum+taker_flow'],
+    bearish: ['oi_momentum+taker_flow'],
   },
 }
 
@@ -276,27 +281,26 @@ function priceAndOiChange(snapshots) {
 }
 
 // The original structural signal: latest-value rules plus the OI-vs-price
-// trend rule, evaluated over a 4-hour window.
+// trend rule, evaluated over a 4-hour window. Volatility is computed by the
+// caller (run.js/backtest.js) and attached to the saved row directly, not
+// threaded through here -- nothing in the 4h rule set needs to read it.
 export function evaluateSignal(snapshots) {
   const latest = snapshots[snapshots.length - 1]
   const { priceChangePct, oiChangePct } = priceAndOiChange(snapshots)
 
   const rules = [...latestValueRules(latest), scoreOpenInterestTrend(priceChangePct, oiChangePct)]
 
-  return summarize(rules, '4h', { volatility: computeRealizedVolatility(snapshots) })
+  return summarize(rules, '4h')
 }
 
-// The faster momentum signal: the same latest-value rules plus two rules that
-// specifically measure short-window price/OI movement, evaluated over 1 hour.
+// The faster momentum signal: the same latest-value rules plus oi_momentum,
+// evaluated over 1 hour. (price_momentum was removed -- see the comment
+// above scoreOpenInterestMomentum for why.)
 export function evaluateShortTermSignal(snapshots) {
   const latest = snapshots[snapshots.length - 1]
-  const { priceChangePct, oiChangePct } = priceAndOiChange(snapshots)
+  const { oiChangePct } = priceAndOiChange(snapshots)
 
-  const rules = [
-    ...latestValueRules(latest),
-    scorePriceMomentum(priceChangePct),
-    scoreOpenInterestMomentum(oiChangePct),
-  ]
+  const rules = [...latestValueRules(latest), scoreOpenInterestMomentum(oiChangePct)]
 
   return summarize(rules, '1h')
 }

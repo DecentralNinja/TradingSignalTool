@@ -62,13 +62,35 @@ create table if not exists signals (
 create index if not exists signals_symbol_timeframe_evaluated_at_idx
   on signals (symbol, timeframe, evaluated_at desc);
 
+-- Estimated liquidation price clusters (modeled from OI + assumed leverage
+-- distribution, not real liquidation events -- see fetcher/src/liquidationHeatmap.js).
+-- Informational only: not yet folded into the scored signal, same as CFTC
+-- data, pending backtested validation.
+create table if not exists liquidation_clusters (
+  id bigint generated always as identity primary key,
+  symbol text not null,
+  computed_at timestamptz not null,
+  reference_price numeric not null,
+  cluster_price numeric not null,
+  dominant_side text not null check (dominant_side in ('long', 'short')),
+  windows_confirmed_in integer not null,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists liquidation_clusters_symbol_computed_at_idx
+  on liquidation_clusters (symbol, computed_at desc);
+
 -- Fetcher writes with the service_role key (bypasses RLS).
 -- Frontend reads with the anon key, so allow public read-only access.
 alter table market_snapshots enable row level security;
 alter table signals enable row level security;
+alter table liquidation_clusters enable row level security;
 
 create policy "Public read access" on market_snapshots
   for select using (true);
 
 create policy "Public read access" on signals
+  for select using (true);
+
+create policy "Public read access" on liquidation_clusters
   for select using (true);

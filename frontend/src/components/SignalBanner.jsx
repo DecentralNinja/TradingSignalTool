@@ -35,9 +35,15 @@ export function SignalBanner({ signal }) {
   }
 
   const meta = SIGNAL_META[signal.signal] ?? SIGNAL_META.neutral
+  // Only a backtest-proven combo gets the strong colored treatment -- an
+  // "experimental" bullish/bearish call is a real rule-based read, but one
+  // without evidence it makes money after fees, so it's styled neutral
+  // rather than looking as actionable as a proven one.
+  const isUnproven = signal.confidence === 'experimental'
+  const className = isUnproven ? 'neutral' : meta.className
 
   return (
-    <div className={`signal-banner signal-banner--${meta.className}`}>
+    <div className={`signal-banner signal-banner--${className}`}>
       <span className="signal-banner__icon" aria-hidden="true">
         {meta.icon}
       </span>
@@ -47,9 +53,9 @@ export function SignalBanner({ signal }) {
           {signal.confidence === 'proven' && (
             <span className="signal-banner__confidence signal-banner__confidence--proven">Proven</span>
           )}
-          {signal.confidence === 'experimental' && (
+          {isUnproven && (
             <span className="signal-banner__confidence signal-banner__confidence--experimental">
-              Experimental
+              Not backtest-proven
             </span>
           )}
         </div>

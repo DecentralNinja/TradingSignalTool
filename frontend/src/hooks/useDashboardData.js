@@ -46,6 +46,7 @@ export function useDashboardData() {
   const [latestShortTermSignal, setLatestShortTermSignal] = useState(null)
   const [shortTermSignalHistory, setShortTermSignalHistory] = useState([])
   const [shortTermAccuracy, setShortTermAccuracy] = useState(null)
+  const [liquidationClusters, setLiquidationClusters] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
 
@@ -57,6 +58,7 @@ export function useDashboardData() {
         accuracyResult,
         shortTermHistoryResult,
         shortTermAccuracyResult,
+        liquidationClustersResult,
       ] = await Promise.all([
         supabase
           .from('market_snapshots')
@@ -68,6 +70,13 @@ export function useDashboardData() {
         accuracyForTimeframe('4h'),
         signalsForTimeframe('1h', HISTORY_LIMIT),
         accuracyForTimeframe('1h'),
+        supabase
+          .from('liquidation_clusters')
+          .select('*')
+          .eq('symbol', SYMBOL)
+          .order('computed_at', { ascending: false })
+          .order('cluster_price', { ascending: true })
+          .limit(30),
       ])
 
       if (snapshotsResult.error) throw snapshotsResult.error
@@ -75,10 +84,14 @@ export function useDashboardData() {
       if (accuracyResult.error) throw accuracyResult.error
       if (shortTermHistoryResult.error) throw shortTermHistoryResult.error
       if (shortTermAccuracyResult.error) throw shortTermAccuracyResult.error
+      if (liquidationClustersResult.error) throw liquidationClustersResult.error
 
       const [latest, previous] = snapshotsResult.data ?? []
       const history = signalHistoryResult.data ?? []
       const shortTermHistory = shortTermHistoryResult.data ?? []
+      const allClusterRows = liquidationClustersResult.data ?? []
+      const latestComputedAt = allClusterRows[0]?.computed_at
+      const latestClusters = allClusterRows.filter((row) => row.computed_at === latestComputedAt)
 
       setLatestSnapshot(latest ?? null)
       setPreviousSnapshot(previous ?? null)
@@ -88,6 +101,7 @@ export function useDashboardData() {
       setLatestShortTermSignal(shortTermHistory[0] ?? null)
       setShortTermSignalHistory(shortTermHistory)
       setShortTermAccuracy(computeAccuracy(shortTermAccuracyResult.data ?? []))
+      setLiquidationClusters(latestClusters)
       setError(null)
     } catch (err) {
       setError(err.message)
@@ -111,6 +125,7 @@ export function useDashboardData() {
     latestShortTermSignal,
     shortTermSignalHistory,
     shortTermAccuracy,
+    liquidationClusters,
     loading,
     error,
   }
