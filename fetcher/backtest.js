@@ -11,7 +11,7 @@ config({ quiet: true })
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
-import { evaluateSignal, evaluateShortTermSignal, PROVEN_COMBOS, WINDOW_HOURS, SHORT_WINDOW_HOURS } from './src/signal.js'
+import { evaluateSignal, evaluateShortTermSignal, WINDOW_HOURS, SHORT_WINDOW_HOURS } from './src/signal.js'
 import { evaluateOutcome } from './src/accuracy.js'
 import { computeLiquidationHeatmap, findConfirmedClusters, PROXIMITY_PCT } from './src/liquidationHeatmap.js'
 
@@ -103,6 +103,33 @@ async function fetchKlines(startTime, endTime) {
   return klines
 }
 
+// Coinbase's public candle endpoint -- separate rate-limit domain from
+// Binance, so uses its own (much lighter) pacing. 300-candle cap per call at
+// 15m granularity = 75h/chunk, ~10 calls for 30 days. Timestamps are UNIX
+// SECONDS here (unlike everything else in this file, which is ms).
+const COINBASE_BASE = 'https://api.exchange.coinbase.com'
+const COINBASE_PACE_MS = 500
+
+async function fetchCoinbaseCandles(startTime, endTime) {
+  const chunkMs = 300 * INTERVAL_MS
+  const results = []
+  let cursor = startTime
+
+  while (cursor < endTime) {
+    const chunkEnd = Math.min(cursor + chunkMs, endTime)
+    const url = `${COINBASE_BASE}/products/BTC-USD/candles?granularity=900&start=${new Date(cursor).toISOString()}&end=${new Date(chunkEnd).toISOString()}`
+    const res = await fetch(url, { headers: { 'User-Agent': 'trading-signal-tool-backtest' } })
+    if (!res.ok) throw new Error(`${url} failed: ${res.status} ${await res.text()}`)
+    const data = await res.json()
+    // [time(sec), low, high, open, close, volume]
+    results.push(...data.map((c) => ({ timestamp: c[0] * 1000, close: c[4] })))
+    cursor = chunkEnd
+    await sleep(COINBASE_PACE_MS)
+  }
+
+  return results
+}
+
 async function fetchAllHistoricalData() {
   const endTime = Date.now()
   const startTime = endTime - DAYS_BACK * 24 * 60 * 60 * 1000
@@ -188,6 +215,14 @@ async function fetchAllHistoricalData() {
   console.log('Fetching Fear & Greed history...')
   const fearGreedRaw = await cached('feargreed', () => fetchJson(`https://api.alternative.me/fng/?limit=${DAYS_BACK + 2}`))
 
+  console.log('Fetching Coinbase BTC-USD history (for Coinbase Premium)...')
+  let coinbase = []
+  try {
+    coinbase = await cached('coinbase', () => fetchCoinbaseCandles(startTime, endTime))
+  } catch (err) {
+    console.log(`  coinbase fetch failed, continuing without it: ${err.message}`)
+  }
+
   return {
     klines,
     fundingRates,
@@ -195,6 +230,7 @@ async function fetchAllHistoricalData() {
     longShort,
     topTrader,
     takerFlow,
+    coinbase,
     basis,
     fearGreed: fearGreedRaw.data,
   }
@@ -224,6 +260,7 @@ function reconstructSnapshots(raw) {
   const takerLookup = makeLookup(raw.takerFlow, (r) => r.timestamp)
   const basisLookup = makeLookup(raw.basis, (r) => r.timestamp)
   const fearGreedLookup = makeLookup(raw.fearGreed, (r) => Number(r.timestamp) * 1000)
+  const coinbaseLookup = makeLookup(raw.coinbase ?? [], (r) => r.timestamp)
 
   const snapshots = []
 
@@ -236,12 +273,17 @@ function reconstructSnapshots(raw) {
     const taker = takerLookup(t)
     const basisEntry = basisLookup(t)
     const fearGreed = fearGreedLookup(t)
+    const coinbase = coinbaseLookup(t)
 
     if (!oi || !longShort || !taker) continue
 
+    const binancePrice = Number(k[4])
+    const coinbasePremiumPct = coinbase ? ((coinbase.close - binancePrice) / binancePrice) * 100 : null
+
     snapshots.push({
       fetched_at: new Date(t).toISOString(),
-      mark_price: Number(k[4]),
+      mark_price: binancePrice,
+      coinbase_premium_pct: coinbasePremiumPct,
       funding_rate: funding ? Number(funding.fundingRate) : 0,
       open_interest: Number(oi.sumOpenInterest),
       long_short_ratio: Number(longShort.longShortRatio),
@@ -676,94 +718,6 @@ function backtestConfluence(snapshots) {
   }
 }
 
-const CLUSTER_LONGEST_WINDOW_MS = Math.max(...CLUSTER_WINDOWS_HOURS) * 60 * 60 * 1000
-const VETO_MIN_CONFIRM = 3 // only the tier that showed real signal in the touch-event backtest
-
-// Whether a strongly-confirmed (3/3) cluster sits in the direction the trade
-// needs price to move -- above current price for a bullish call, below for a
-// bearish one -- within the same PROXIMITY_PCT used elsewhere. Returns null
-// if there isn't yet enough prior history (168h) to compute clusters at all.
-function clusterInTheWay(snapshots, i, firstT, signal) {
-  const t = new Date(snapshots[i].fetched_at).getTime()
-  if (t - firstT < CLUSTER_LONGEST_WINDOW_MS) return null
-
-  const heatmaps = CLUSTER_WINDOWS_HOURS.map((hours) =>
-    computeLiquidationHeatmap(windowSlice(snapshots, i, hours), snapshots[i].mark_price)
-  )
-  const clusters = findConfirmedClusters(heatmaps, snapshots[i].mark_price).filter(
-    (c) => c.windowsConfirmedIn >= VETO_MIN_CONFIRM
-  )
-  const price = snapshots[i].mark_price
-
-  if (signal === 'bullish') {
-    return clusters.some((c) => c.price > price && (c.price - price) / price <= PROXIMITY_PCT)
-  }
-  return clusters.some((c) => c.price < price && (price - c.price) / price <= PROXIMITY_PCT)
-}
-
-// Tests the veto idea: split each timeframe's PROVEN_COMBOS calls by whether
-// a strongly-confirmed liquidation cluster sat between current price and
-// where the trade needs price to go. If clusters really do act as
-// support/resistance (per the touch-event backtest), a proven call with a
-// wall in its path should underperform one with a clear path.
-function backtestLiquidationVeto(snapshots) {
-  const firstT = new Date(snapshots[0].fetched_at).getTime()
-  const configs = [
-    { label: '4h', windowHours: WINDOW_HOURS, evaluateFn: evaluateSignal },
-    { label: '1h', windowHours: SHORT_WINDOW_HOURS, evaluateFn: evaluateShortTermSignal },
-  ]
-
-  for (const { label, windowHours, evaluateFn } of configs) {
-    const buckets = { clear: [], obstructed: [] }
-    let unknown = 0
-
-    for (let i = 0; i < snapshots.length; i++) {
-      const window = windowSlice(snapshots, i, windowHours)
-      if (window.length < 2) continue
-
-      const { signal, combo } = evaluateFn(window)
-      if (signal === 'neutral') continue
-      const proven = (PROVEN_COMBOS[label]?.[signal] ?? []).includes(combo)
-      if (!proven) continue
-
-      const inTheWay = clusterInTheWay(snapshots, i, firstT, signal)
-      if (inTheWay === null) {
-        unknown++
-        continue
-      }
-
-      const evaluatedAtMs = new Date(snapshots[i].fetched_at).getTime()
-      const outcomeIndex = snapshots.findIndex(
-        (s) => new Date(s.fetched_at).getTime() >= evaluatedAtMs + windowHours * 60 * 60 * 1000
-      )
-      if (outcomeIndex === -1) continue
-
-      const { correct, priceChangePct } = evaluateOutcome(signal, snapshots[i].mark_price, snapshots[outcomeIndex].mark_price)
-      const tradeReturnPct = signal === 'bearish' ? -priceChangePct : priceChangePct
-      const netReturnPct = tradeReturnPct - ROUND_TRIP_FEE_PCT
-      ;(inTheWay ? buckets.obstructed : buckets.clear).push({ correct, tradeReturnPct, netReturnPct })
-    }
-
-    console.log(
-      `\n=== Liquidation-cluster veto test: ${label} proven-combo calls, split by whether a 3/3 cluster sat in the trade's path ===`
-    )
-    for (const key of ['clear', 'obstructed']) {
-      const trades = buckets[key]
-      if (trades.length === 0) {
-        console.log(`  ${key}: never occurred`)
-        continue
-      }
-      const wins = trades.filter((t) => t.correct).length
-      const avgNet = trades.reduce((s, t) => s + t.netReturnPct, 0) / trades.length
-      const avgGross = trades.reduce((s, t) => s + t.tradeReturnPct, 0) / trades.length
-      console.log(
-        `  ${key}: n=${trades.length} | win rate ${((wins / trades.length) * 100).toFixed(1)}% | gross ${avgGross >= 0 ? '+' : ''}${avgGross.toFixed(3)}% | NET ${avgNet >= 0 ? '+' : ''}${avgNet.toFixed(3)}%`
-      )
-    }
-    if (unknown > 0) console.log(`  (${unknown} proven fires skipped -- not enough cluster history yet)`)
-  }
-}
-
 // Exhaustively checks every PAIR of rules that fire in the same direction on
 // the same tick, regardless of whether the total score actually crossed the
 // +-2 threshold (i.e. even if a third rule fired the opposite way and
@@ -840,6 +794,72 @@ function backtestPairwiseCombos(snapshots) {
   }
 }
 
+// Coinbase Premium: (Coinbase BTC-USD price - Binance BTC-USDT price) / Binance
+// price. A well-known industry indicator (CryptoQuant etc. track this) on the
+// theory that Coinbase reflects US institutional/spot demand, distinct from
+// Binance's leveraged/global futures flow. Tests BOTH hypotheses -- premium
+// as confirmation (positive premium = US buying = bullish continuation) and
+// as contrarian (extreme premium = overheated, fade it) -- across a
+// threshold sweep, since neither direction should be assumed without data
+// (same discipline as every other rule here).
+//
+// Status as of the 2026-08-13 backtest: promising but not yet proven --
+// contrarian at |premium|>0.1% showed 64.3-75.0% win rate and positive net
+// expectancy at both timeframes, improving monotonically with threshold
+// (good sign against pure noise). But the underlying events were one-sided
+// (only Coinbase-discount was ever observed, never premium) and clustered
+// mostly in a single 3-day stretch (Jul 29-31) rather than spread evenly --
+// real signal, not yet battle-tested. Not wired into signal.js yet.
+function backtestCoinbasePremium(snapshots) {
+  const withPremium = snapshots.filter((s) => s.coinbase_premium_pct != null)
+  if (withPremium.length === 0) {
+    console.log('\n=== Coinbase Premium test: no data (fetch may have failed) ===')
+    return
+  }
+  console.log(`\n(Coinbase premium available for ${withPremium.length}/${snapshots.length} snapshots)`)
+
+  const thresholds = [0.02, 0.05, 0.1, 0.15, 0.2]
+
+  for (const horizonHours of [SHORT_WINDOW_HOURS, WINDOW_HOURS]) {
+    console.log(`\n=== Coinbase Premium level test (${horizonHours}h outcome) ===`)
+    for (const threshold of thresholds) {
+      const buckets = { confirm: [], contrarian: [] }
+
+      for (let i = 0; i < snapshots.length; i++) {
+        const premium = snapshots[i].coinbase_premium_pct
+        if (premium == null || Math.abs(premium) <= threshold) continue
+
+        const evalTime = new Date(snapshots[i].fetched_at).getTime()
+        const outcomeIndex = snapshots.findIndex(
+          (s) => new Date(s.fetched_at).getTime() >= evalTime + horizonHours * 60 * 60 * 1000
+        )
+        if (outcomeIndex === -1) continue
+
+        const confirmSignal = premium > 0 ? 'bullish' : 'bearish'
+        const contrarianSignal = confirmSignal === 'bullish' ? 'bearish' : 'bullish'
+
+        for (const [key, signal] of [['confirm', confirmSignal], ['contrarian', contrarianSignal]]) {
+          const { correct, priceChangePct } = evaluateOutcome(signal, snapshots[i].mark_price, snapshots[outcomeIndex].mark_price)
+          const tradeReturnPct = signal === 'bearish' ? -priceChangePct : priceChangePct
+          const netReturnPct = tradeReturnPct - ROUND_TRIP_FEE_PCT
+          buckets[key].push({ correct, tradeReturnPct, netReturnPct })
+        }
+      }
+
+      for (const key of ['confirm', 'contrarian']) {
+        const trades = buckets[key]
+        if (trades.length < MIN_COMBO_SAMPLE) continue
+        const wins = trades.filter((t) => t.correct).length
+        const avgNet = trades.reduce((s, t) => s + t.netReturnPct, 0) / trades.length
+        const avgGross = trades.reduce((s, t) => s + t.tradeReturnPct, 0) / trades.length
+        console.log(
+          `  [${key}] |premium|>${threshold}%: n=${trades.length} | win rate ${((wins / trades.length) * 100).toFixed(1)}% | gross ${avgGross >= 0 ? '+' : ''}${avgGross.toFixed(3)}% | NET ${avgNet >= 0 ? '+' : ''}${avgNet.toFixed(3)}%`
+        )
+      }
+    }
+  }
+}
+
 async function main() {
   const raw = await fetchAllHistoricalData()
   console.log(
@@ -855,8 +875,8 @@ async function main() {
   backtestMomentumHypotheses(snapshots)
   backtestOiMomentumThresholds(snapshots)
   backtestConfluence(snapshots)
-  backtestLiquidationVeto(snapshots)
   backtestPairwiseCombos(snapshots)
+  backtestCoinbasePremium(snapshots)
 }
 
 main().catch((err) => {
