@@ -13,12 +13,14 @@ import {
   saveSnapshot,
   getRecentSnapshots,
   saveSignal,
+  getPreviousSignal,
   getRecentVolatilities,
   getSignalsPendingOutcome,
   getSnapshotPrice,
   saveSignalOutcome,
   saveLiquidationClusters,
 } from './supabase.js'
+import { sendWhatsApp } from './notify.js'
 import {
   evaluateSignal,
   evaluateShortTermSignal,
@@ -156,6 +158,17 @@ async function runTimeframe(client, snapshot, { timeframe, windowHours, evaluate
     confidence,
     volatility: volatility ?? null,
     volatility_regime: volatilityRegime,
+  }
+
+  // WhatsApp alert only for a NEW proven bullish/bearish call -- not neutral
+  // (the whole point), not experimental (unproven combos aren't worth an
+  // interruption), and not a repeat of the same direction already alerted on
+  // last cycle (this rule re-fires every 15min while a signal holds).
+  const previousSignal = await getPreviousSignal(client, SYMBOL, timeframe)
+  if (signal !== 'neutral' && confidence === 'proven' && signal !== previousSignal) {
+    await sendWhatsApp(
+      `BTC ${timeframe} ${signal.toUpperCase()} signal (proven)\nPrice: $${snapshot.mark_price.toLocaleString('en-US')}\n${combo}`
+    )
   }
 
   await saveSignal(client, signalRow)

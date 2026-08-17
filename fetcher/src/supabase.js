@@ -51,6 +51,27 @@ export async function saveSignal(client, signalRow) {
   })
 }
 
+// The single most recent prior signal for this timeframe, used to detect
+// whether a freshly-evaluated signal is a NEW call (direction changed) or
+// just a continuation of one already alerted on.
+export async function getPreviousSignal(client, symbol, timeframe) {
+  return withRetry(async () => {
+    const { data, error } = await client
+      .from('signals')
+      .select('signal')
+      .eq('symbol', symbol)
+      .eq('timeframe', timeframe)
+      .order('evaluated_at', { ascending: false })
+      .limit(1)
+
+    if (error) {
+      throw new Error(`Failed to load previous signal: ${error.message}`)
+    }
+
+    return data.length > 0 ? data[0].signal : null
+  })
+}
+
 export async function getRecentVolatilities(client, symbol, timeframe, limit) {
   return withRetry(async () => {
     const { data, error } = await client
