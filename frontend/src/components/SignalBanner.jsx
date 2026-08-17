@@ -1,5 +1,10 @@
 import './SignalBanner.scss'
-import { formatDateTime, formatPercent } from '../lib/format'
+import { formatDateTime, formatPercent, formatPrice } from '../lib/format'
+
+// Reference leverage used only to frame the ROI% shown here -- matches the
+// one used in the WhatsApp alert (fetcher/src/run.js), doesn't affect the
+// price levels themselves.
+const REFERENCE_LEVERAGE = 10
 
 const SIGNAL_META = {
   bullish: { label: 'Bullish', className: 'good', icon: '▲' },
@@ -60,6 +65,29 @@ export function SignalBanner({ signal }) {
           )}
         </div>
         <p className="signal-banner__reason">{signal.reason}</p>
+        {signal.take_profit_price != null && signal.stop_loss_price != null && (
+          <div className="signal-banner__levels">
+            <div className="signal-banner__level signal-banner__level--tp">
+              <span className="signal-banner__level-label">TP</span>
+              <span className="signal-banner__level-price">{formatPrice(signal.take_profit_price)}</span>
+              <span className="signal-banner__level-roi">
+                {formatPercent(signal.take_profit_pct * REFERENCE_LEVERAGE, { signed: true, decimals: 1 })} ROI @
+                {REFERENCE_LEVERAGE}x
+              </span>
+            </div>
+            <div className="signal-banner__level signal-banner__level--sl">
+              <span className="signal-banner__level-label">SL</span>
+              <span className="signal-banner__level-price">{formatPrice(signal.stop_loss_price)}</span>
+              <span className="signal-banner__level-roi">
+                {formatPercent(signal.stop_loss_pct * REFERENCE_LEVERAGE, { signed: true, decimals: 1 })} ROI @
+                {REFERENCE_LEVERAGE}x
+              </span>
+            </div>
+            {signal.exit_by_hours != null && (
+              <span className="signal-banner__levels-exit">Exit by {signal.exit_by_hours}h if neither hit</span>
+            )}
+          </div>
+        )}
         <p className="signal-banner__timestamp">
           as of {formatDateTime(signal.evaluated_at)}
           {volatilityText(signal) && <> · {volatilityText(signal)}</>}

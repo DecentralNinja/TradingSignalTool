@@ -26,6 +26,7 @@ import {
   evaluateShortTermSignal,
   classifyVolatilityRegime,
   computeRealizedVolatility,
+  suggestTradeLevels,
   WINDOW_HOURS,
   SHORT_WINDOW_HOURS,
 } from './signal.js'
@@ -37,6 +38,10 @@ import { computeLiquidationHeatmap, findConfirmedClusters } from './liquidationH
 // as more history accumulates (see backtest.js for a 30-day version using
 // Binance's own historical data instead of our live collection).
 const HEATMAP_WINDOW_HOURS = [24, 72, 168]
+
+// Reference leverage used only for the ROI% shown in TP/SL alerts -- doesn't
+// affect the price levels themselves, just how the percentage move is framed.
+const REFERENCE_LEVERAGE = 10
 
 const SYMBOL = 'BTCUSDT'
 
@@ -146,6 +151,12 @@ async function runTimeframe(client, snapshot, { timeframe, windowHours, evaluate
   const confidence =
     baseConfidence === 'proven' && concurrentSignal && concurrentSignal === signal ? 'experimental' : baseConfidence
 
+  // Concrete TP/SL price levels, sized off the historical average win/loss
+  // for this exact combo -- null for experimental signals or combos without
+  // a TRADE_LEVELS entry (see signal.js).
+  const tradeLevels =
+    signal !== 'neutral' ? suggestTradeLevels(timeframe, signal, combo, snapshot.mark_price) : null
+
   const signalRow = {
     symbol: SYMBOL,
     timeframe,
@@ -158,6 +169,11 @@ async function runTimeframe(client, snapshot, { timeframe, windowHours, evaluate
     confidence,
     volatility: volatility ?? null,
     volatility_regime: volatilityRegime,
+    take_profit_price: tradeLevels?.takeProfitPrice ?? null,
+    stop_loss_price: tradeLevels?.stopLossPrice ?? null,
+    exit_by_hours: tradeLevels?.exitByHours ?? null,
+    take_profit_pct: tradeLevels?.avgWinPct ?? null,
+    stop_loss_pct: tradeLevels?.avgLossPct ?? null,
   }
 
   // WhatsApp alert only for a NEW proven bullish/bearish call -- not neutral
@@ -167,9 +183,19 @@ async function runTimeframe(client, snapshot, { timeframe, windowHours, evaluate
   const previousSignal = await getPreviousSignal(client, SYMBOL, timeframe)
   if (signal !== 'neutral' && confidence === 'proven' && signal !== previousSignal) {
     const dot = signal === 'bullish' ? '🟢' : '🔴'
-    await sendWhatsApp(
-      `${dot} BTC ${timeframe} ${signal.toUpperCase()} signal (proven)\nPrice: $${snapshot.mark_price.toLocaleString('en-US')}\n${combo}`
-    )
+    let message = `${dot} BTC ${timeframe} ${signal.toUpperCase()} signal (proven)\nPrice: $${snapshot.mark_price.toLocaleString('en-US')}\n${combo}`
+
+    if (tradeLevels) {
+      const tpRoi = tradeLevels.avgWinPct * REFERENCE_LEVERAGE
+      const slRoi = tradeLevels.avgLossPct * REFERENCE_LEVERAGE
+      const fmtPct = (n) => `${n >= 0 ? '+' : ''}${n.toFixed(2)}%`
+      const fmtRoi = (n) => `${n >= 0 ? '+' : ''}${n.toFixed(1)}% ROI @${REFERENCE_LEVERAGE}x`
+      message += `\n\nTP: $${tradeLevels.takeProfitPrice.toLocaleString('en-US', { maximumFractionDigits: 0 })} (${fmtPct(tradeLevels.avgWinPct)}, ${fmtRoi(tpRoi)})`
+      message += `\nSL: $${tradeLevels.stopLossPrice.toLocaleString('en-US', { maximumFractionDigits: 0 })} (${fmtPct(tradeLevels.avgLossPct)}, ${fmtRoi(slRoi)})`
+      message += `\nExit by: ${tradeLevels.exitByHours}h if neither hit`
+    }
+
+    await sendWhatsApp(message)
   }
 
   await saveSignal(client, signalRow)

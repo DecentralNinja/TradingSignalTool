@@ -66,6 +66,53 @@
     line-height: 1.5;
   }
 
+  &__levels {
+    margin-top: 12px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: center;
+  }
+
+  &__level {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    padding: 6px 12px;
+    border-radius: 8px;
+    background: var(--surface-alt, rgba(128, 128, 128, 0.08));
+    font-size: 13px;
+
+    &--tp {
+      border-left: 3px solid var(--status-good);
+    }
+    &--sl {
+      border-left: 3px solid var(--status-critical);
+    }
+  }
+
+  &__level-label {
+    font-weight: 700;
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    color: var(--text-muted);
+  }
+
+  &__level-price {
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+
+  &__level-roi {
+    color: var(--text-muted);
+    font-size: 12px;
+  }
+
+  &__levels-exit {
+    color: var(--text-muted);
+    font-size: 12px;
+  }
+
   &__timestamp {
     margin-top: 8px;
     color: var(--text-muted);

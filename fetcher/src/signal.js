@@ -222,6 +222,50 @@ function getConfidence(timeframe, signal, combo) {
   return proven.includes(combo) ? 'proven' : 'experimental'
 }
 
+// Average win/loss size (gross price move %) for each proven combo, from the
+// same 2026-08-13 backtest that produced PROVEN_COMBOS -- used to suggest a
+// concrete take-profit/stop-loss price level per signal instead of just a
+// bullish/bearish call. avgLossPct is the real signed average (negative).
+// Re-derive alongside PROVEN_COMBOS whenever backtest.js is rerun.
+const TRADE_LEVELS = {
+  '4h': {
+    bullish: { 'fear_greed+taker_flow': { avgWinPct: 0.713, avgLossPct: -0.401 } },
+    bearish: {},
+  },
+  '1h': {
+    bullish: {
+      'fear_greed+taker_flow': { avgWinPct: 0.705, avgLossPct: -0.129 },
+      'oi_momentum+taker_flow': { avgWinPct: 0.253, avgLossPct: -0.272 },
+    },
+    bearish: {
+      'oi_momentum+taker_flow': { avgWinPct: 0.261, avgLossPct: -0.211 },
+    },
+  },
+}
+
+// Suggests concrete take-profit/stop-loss price levels for a proven signal,
+// sized off the historical average win/loss for that exact combo -- not a
+// guess, the same numbers backing PROVEN_COMBOS. Returns null for anything
+// not in TRADE_LEVELS (experimental signals, or a proven combo someone added
+// to PROVEN_COMBOS without also updating this table).
+export function suggestTradeLevels(timeframe, signal, combo, entryPrice) {
+  const levels = TRADE_LEVELS[timeframe]?.[signal]?.[combo]
+  if (!levels) return null
+
+  const directionMult = signal === 'bullish' ? 1 : -1
+  const takeProfitPrice = entryPrice * (1 + (directionMult * levels.avgWinPct) / 100)
+  const stopLossPrice = entryPrice * (1 + (directionMult * levels.avgLossPct) / 100)
+  const exitByHours = timeframe === '4h' ? WINDOW_HOURS : SHORT_WINDOW_HOURS
+
+  return {
+    takeProfitPrice,
+    stopLossPrice,
+    exitByHours,
+    avgWinPct: levels.avgWinPct,
+    avgLossPct: levels.avgLossPct,
+  }
+}
+
 function summarize(rules, timeframe, extra = {}) {
   const totalScore = rules.reduce((sum, r) => sum + r.score, 0)
   const reasons = rules.filter((r) => r.reason).map((r) => r.reason)

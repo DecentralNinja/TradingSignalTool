@@ -56,6 +56,11 @@ create table if not exists signals (
   outcome_price numeric,
   outcome_evaluated_at timestamptz,
   outcome_correct boolean,
+  take_profit_price numeric,
+  stop_loss_price numeric,
+  exit_by_hours numeric,
+  take_profit_pct numeric,
+  stop_loss_pct numeric,
   created_at timestamptz not null default now()
 );
 
