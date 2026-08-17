@@ -166,8 +166,9 @@ async function runTimeframe(client, snapshot, { timeframe, windowHours, evaluate
   // last cycle (this rule re-fires every 15min while a signal holds).
   const previousSignal = await getPreviousSignal(client, SYMBOL, timeframe)
   if (signal !== 'neutral' && confidence === 'proven' && signal !== previousSignal) {
+    const dot = signal === 'bullish' ? '🟢' : '🔴'
     await sendWhatsApp(
-      `BTC ${timeframe} ${signal.toUpperCase()} signal (proven)\nPrice: $${snapshot.mark_price.toLocaleString('en-US')}\n${combo}`
+      `${dot} BTC ${timeframe} ${signal.toUpperCase()} signal (proven)\nPrice: $${snapshot.mark_price.toLocaleString('en-US')}\n${combo}`
     )
   }
 
