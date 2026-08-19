@@ -45,6 +45,25 @@ const REFERENCE_LEVERAGE = 10
 
 const SYMBOL = 'BTCUSDT'
 
+// Wraps a data-source fetch so its failure doesn't kill the whole cycle via
+// Promise.all rejection -- logs and returns `fallback` instead of throwing.
+// Only used for basis and CFTC: real production incident history (5 days of
+// CloudWatch logs, 2026-08-19) showed 129 entire cycles lost this way -- 126
+// from Binance IP bans specifically on the basis endpoint, 3 from a brief
+// CFTC 503 outage -- roughly 27% of all cycles in that window. Both rules
+// already treat these fields as optional (scoreBasis scores 0 on null; CFTC
+// isn't used in scoring at all, just displayed), so this is safe. The other
+// 8 sources below stay fatal on purpose -- there's no meaningful signal to
+// evaluate without price/OI/etc, so failing loudly there is correct.
+async function safeFetch(promise, label, fallback) {
+  try {
+    return await promise
+  } catch (err) {
+    console.error(`${label} failed, continuing without it: ${err.message}`)
+    return fallback
+  }
+}
+
 async function fetchSnapshot(symbol) {
   const [price, oi, longShort, takerVol, topTrader, basis, bybitTicker, bybitLongShort, fearGreed, cftc] =
     await Promise.all([
@@ -53,11 +72,16 @@ async function fetchSnapshot(symbol) {
       getLongShortRatio(symbol),
       getTakerBuySellVolume(symbol),
       getTopTraderPositionRatio(symbol),
-      getBasis(symbol),
+      safeFetch(getBasis(symbol), 'getBasis', { basis: null, basisRate: null }),
       getBybitTicker(symbol),
       getBybitLongShortRatio(symbol),
       getFearGreedIndex(),
-      getLeveragedFundsPositioning(),
+      safeFetch(getLeveragedFundsPositioning(), 'getLeveragedFundsPositioning', {
+        reportDate: null,
+        leveragedFundsLong: null,
+        leveragedFundsShort: null,
+        leveragedFundsLongShortRatio: null,
+      }),
     ])
 
   return {
@@ -87,7 +111,7 @@ async function fetchSnapshot(symbol) {
     bybit_long_short_ratio: bybitLongShort.longShortRatio,
     fear_greed_value: fearGreed.value,
     fear_greed_classification: fearGreed.classification,
-    cftc_report_date: new Date(cftc.reportDate).toISOString(),
+    cftc_report_date: cftc.reportDate ? new Date(cftc.reportDate).toISOString() : null,
     cftc_lev_funds_long: cftc.leveragedFundsLong,
     cftc_lev_funds_short: cftc.leveragedFundsShort,
     cftc_lev_funds_long_short_ratio: cftc.leveragedFundsLongShortRatio,
