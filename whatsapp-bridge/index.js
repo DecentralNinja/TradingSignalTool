@@ -1,12 +1,16 @@
 // Self-hosted WhatsApp bridge using Baileys (unofficial multi-device protocol
 // client). Links to a real WhatsApp account by QR scan, then exposes a tiny
-// HTTP endpoint the Lambda fetch cycle calls to send alert messages to that
-// same account's own chat (self-chat) -- no third party ever sees the
-// messages, since this runs entirely on infrastructure we control. Must stay
-// running persistently (holds a live WebSocket connection to WhatsApp), so
-// this is not deployable as a Lambda -- runs on a small always-on VM instead.
+// HTTP endpoint the Lambda fetch cycle calls to post alert messages to the
+// BTC Signal Alerts channel. Linked to a DIFFERENT account than the
+// recipient on purpose -- WhatsApp doesn't push notifications for content
+// sent from your own linked devices or your own channel (confirmed by
+// direct testing), so a genuinely separate account has to be the one
+// posting for a real notification to fire. That separate account must be
+// promoted to admin on the channel first (via WhatsApp's own UI -- Baileys
+// has no API to do this) before it can post here. Must stay running
+// persistently (holds a live WebSocket connection to WhatsApp), so this is
+// not deployable as a Lambda -- runs on a small always-on VM instead.
 require('dotenv').config()
-const fs = require('fs')
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys')
 const { Boom } = require('@hapi/boom')
 const qrcode = require('qrcode-terminal')
@@ -15,29 +19,16 @@ const pino = require('pino')
 
 const PORT = process.env.PORT || 3000
 const BRIDGE_SECRET = process.env.BRIDGE_SECRET
-const CHANNEL_NAME = process.env.CHANNEL_NAME || 'BTC Signal Alerts'
-const CHANNEL_FILE = './channel.json'
+const CHANNEL_JID = process.env.CHANNEL_JID // e.g. 120363412044603667@newsletter
 
-if (!BRIDGE_SECRET) {
-  console.error('BRIDGE_SECRET env var is required.')
+if (!BRIDGE_SECRET || !CHANNEL_JID) {
+  console.error('BRIDGE_SECRET and CHANNEL_JID env vars are required.')
   process.exit(1)
 }
 
+const targetJid = CHANNEL_JID
 let sock = null
 let isReady = false
-let channelJid = fs.existsSync(CHANNEL_FILE) ? JSON.parse(fs.readFileSync(CHANNEL_FILE, 'utf8')).jid : null
-
-// Creates the alerts channel once (persisted to CHANNEL_FILE) and follows it
-// so it shows up under WhatsApp's Updates tab -- kept separate from personal
-// chats/self-notes, unlike posting to self-chat.
-async function ensureChannel() {
-  if (channelJid) return
-  const metadata = await sock.newsletterCreate(CHANNEL_NAME, 'Automated BTC trading signal alerts')
-  channelJid = metadata.id
-  await sock.newsletterFollow(channelJid)
-  fs.writeFileSync(CHANNEL_FILE, JSON.stringify({ jid: channelJid, name: CHANNEL_NAME }))
-  console.log(`Created and followed channel "${CHANNEL_NAME}" (${channelJid})`)
-}
 
 async function startSocket() {
   const { state, saveCreds } = await useMultiFileAuthState('./auth_info')
@@ -60,7 +51,6 @@ async function startSocket() {
     if (connection === 'open') {
       isReady = true
       console.log('WhatsApp bridge connected.')
-      ensureChannel().catch((err) => console.error('Channel setup failed:', err.message))
     }
 
     if (connection === 'close') {
@@ -90,16 +80,13 @@ app.post('/send', async (req, res) => {
   if (!isReady || !sock) {
     return res.status(503).json({ error: 'whatsapp not connected' })
   }
-  if (!channelJid) {
-    return res.status(503).json({ error: 'channel not set up yet' })
-  }
   const { message } = req.body
   if (!message) {
     return res.status(400).json({ error: 'message is required' })
   }
 
   try {
-    await sock.sendMessage(channelJid, { text: message })
+    await sock.sendMessage(targetJid, { text: message })
     res.json({ ok: true })
   } catch (err) {
     console.error('Send failed:', err.message)

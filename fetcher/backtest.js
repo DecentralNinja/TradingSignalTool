@@ -444,7 +444,7 @@ function backtestTimeframe(snapshots, windowHours, evaluateFn, label) {
     const window = windowSlice(snapshots, i, windowHours)
     if (window.length < 2) continue
 
-    const { signal, rules, combo } = evaluateFn(window)
+    const { signal, rules, combo, confidence } = evaluateFn(window)
     const evaluatedAtMs = new Date(snapshots[i].fetched_at).getTime()
     const outcomeIndex = snapshots.findIndex(
       (s) => new Date(s.fetched_at).getTime() >= evaluatedAtMs + windowHours * 60 * 60 * 1000
@@ -468,6 +468,7 @@ function backtestTimeframe(snapshots, windowHours, evaluateFn, label) {
     // without re-fetching or re-slicing the snapshot history.
     results.push({
       signal,
+      confidence,
       correct,
       rules,
       tradeReturnPct,
@@ -575,6 +576,48 @@ function reportCombinations(results, signalType) {
     console.log(
       `     [${r.avgNetReturn >= 0 ? '+' : ''}${r.avgNetReturn.toFixed(3)}% net/trade] ${r.combo} (n=${r.count}, ${r.winRate.toFixed(1)}% win rate)`
     )
+  }
+}
+
+// Replays the exact WhatsApp alert trigger from run.js: signal !== 'neutral'
+// AND confidence === 'proven' AND signal !== the immediately preceding row's
+// signal (regardless of that prior row's own confidence -- matches
+// getPreviousSignal, which just reads the last saved row's direction). Only
+// rows that clear all three actually reach a phone; this reports real
+// accuracy and leveraged ROI for exactly that subset, not the general
+// combo stats already printed above.
+function reportWhatsAppAlertPerformance(results, label) {
+  const REFERENCE_LEVERAGE = 10
+  const alerts = []
+  let previousSignal = null
+
+  for (const r of results) {
+    if (r.signal !== 'neutral' && r.confidence === 'proven' && r.signal !== previousSignal) {
+      alerts.push(r)
+    }
+    previousSignal = r.signal
+  }
+
+  console.log(`\n  -- WhatsApp alert replay: ${label} (${alerts.length} alerts over the backtest period) --`)
+  if (alerts.length === 0) {
+    console.log('     no alerts would have fired')
+    return
+  }
+
+  const winRate = (alerts.filter((a) => a.correct).length / alerts.length) * 100
+  const avgNetReturn = alerts.reduce((s, a) => s + a.netReturnPct, 0) / alerts.length
+  const avgLeveragedRoi = avgNetReturn * REFERENCE_LEVERAGE
+  const totalNetReturn = alerts.reduce((s, a) => s + a.netReturnPct, 0)
+
+  console.log(`     directional accuracy: ${winRate.toFixed(1)}% (${alerts.filter((a) => a.correct).length}/${alerts.length})`)
+  console.log(
+    `     avg net return/alert (no leverage): ${avgNetReturn >= 0 ? '+' : ''}${avgNetReturn.toFixed(3)}%  ->  ${avgLeveragedRoi >= 0 ? '+' : ''}${avgLeveragedRoi.toFixed(2)}% ROI at ${REFERENCE_LEVERAGE}x (matches the app's ROI framing; ignores liquidation risk and funding costs)`
+  )
+  console.log(
+    `     summed net return if you took every alert at equal size: ${totalNetReturn >= 0 ? '+' : ''}${totalNetReturn.toFixed(3)}% (not compounded, no leverage)`
+  )
+  for (const a of alerts) {
+    console.log(`       ${a.signal} [${a.combo}] ${a.correct ? 'WIN' : 'LOSS'} net ${a.netReturnPct >= 0 ? '+' : ''}${a.netReturnPct.toFixed(3)}%`)
   }
 }
 
@@ -1011,6 +1054,9 @@ async function main() {
   backtestFearGreedThresholds(results1h, '1-Hour', fgThresholds)
 
   reportComboWinLossSize(results4h, 'bullish', 'oi_price_trend+taker_flow', '4-Hour')
+
+  reportWhatsAppAlertPerformance(results4h, '4-Hour')
+  reportWhatsAppAlertPerformance(results1h, '1-Hour')
 
   backtestLiquidationTouchEvents(snapshots)
   backtestMomentumHypotheses(snapshots)
