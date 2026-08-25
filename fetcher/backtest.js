@@ -11,7 +11,14 @@ config({ quiet: true })
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
-import { evaluateSignal, evaluateShortTermSignal, WINDOW_HOURS, SHORT_WINDOW_HOURS } from './src/signal.js'
+import {
+  evaluateSignal,
+  evaluateShortTermSignal,
+  WINDOW_HOURS,
+  SHORT_WINDOW_HOURS,
+  combinationKey,
+  scoreToSignal,
+} from './src/signal.js'
 import { evaluateOutcome } from './src/accuracy.js'
 import { computeLiquidationHeatmap, findConfirmedClusters, PROXIMITY_PCT } from './src/liquidationHeatmap.js'
 
@@ -455,7 +462,20 @@ function backtestTimeframe(snapshots, windowHours, evaluateFn, label) {
     // flips the sign of the raw price move.
     const tradeReturnPct = signal === 'bearish' ? -priceChangePct : priceChangePct
     const netReturnPct = tradeReturnPct - ROUND_TRIP_FEE_PCT
-    results.push({ signal, correct, rules, tradeReturnPct, netReturnPct, combo })
+    // rawPriceChangePct and fearGreedValue are carried along (not used by the
+    // headline report below) so later what-if analyses -- superset combo
+    // matching, alternate Fear & Greed thresholds -- can replay outcomes
+    // without re-fetching or re-slicing the snapshot history.
+    results.push({
+      signal,
+      correct,
+      rules,
+      tradeReturnPct,
+      netReturnPct,
+      combo,
+      rawPriceChangePct: priceChangePct,
+      fearGreedValue: window[window.length - 1].fear_greed_value,
+    })
   }
 
   // Counts distinct episodes rather than raw 15-min ticks: four consecutive
@@ -491,6 +511,8 @@ function backtestTimeframe(snapshots, windowHours, evaluateFn, label) {
   reportExpectancy(results, 'bearish')
   reportCombinations(results, 'bullish')
   reportCombinations(results, 'bearish')
+
+  return results
 }
 
 // Expectancy: the average return per trade if every call were acted on with
@@ -553,6 +575,111 @@ function reportCombinations(results, signalType) {
     console.log(
       `     [${r.avgNetReturn >= 0 ? '+' : ''}${r.avgNetReturn.toFixed(3)}% net/trade] ${r.combo} (n=${r.count}, ${r.winRate.toFixed(1)}% win rate)`
     )
+  }
+}
+
+// Prints the avg win/loss size (gross, matching TRADE_LEVELS' methodology in
+// signal.js) for one specific combo -- reportCombinations only prints net
+// expectancy, not the win/loss split TRADE_LEVELS needs.
+function reportComboWinLossSize(results, signalType, combo, label) {
+  const trades = results.filter((r) => r.signal === signalType && r.combo === combo)
+  if (trades.length === 0) {
+    console.log(`\n  -- ${label}: ${combo} (${signalType}) -- no trades`)
+    return
+  }
+  const wins = trades.filter((t) => t.tradeReturnPct > 0)
+  const losses = trades.filter((t) => t.tradeReturnPct <= 0)
+  const avgWin = wins.length > 0 ? wins.reduce((s, t) => s + t.tradeReturnPct, 0) / wins.length : 0
+  const avgLoss = losses.length > 0 ? losses.reduce((s, t) => s + t.tradeReturnPct, 0) / losses.length : 0
+  console.log(
+    `\n  -- ${label}: ${combo} (${signalType}, n=${trades.length}) -- avg win: +${avgWin.toFixed(3)}%, avg loss: ${avgLoss.toFixed(3)}%`
+  )
+}
+
+// Hypothesis #1: PROVEN_COMBOS currently requires an EXACT set match (e.g.
+// "oi_momentum+taker_flow" and nothing else contributing). Live data showed
+// that combo firing diluted -- with an extra confirming rule also
+// contributing -- far more often than in its exact isolated form, and those
+// diluted cases are all thrown away as merely "experimental". This tests a
+// looser rule: proven if the required rules fired WITH THE SAME SIGN as the
+// overall signal, regardless of what else also fired (as long as nothing
+// else pulled hard enough in the other direction to change the outcome --
+// which it structurally can't, since the overall signal direction already
+// reflects the net of every rule's vote).
+function reportSupersetCombo(results, signalType, requiredRuleNames, label) {
+  const directionMult = signalType === 'bullish' ? 1 : -1
+  const matches = (trade) =>
+    requiredRuleNames.every((name) => {
+      const rule = trade.rules.find((r) => r.rule === name)
+      return rule && rule.score * directionMult > 0
+    })
+
+  const exactCombo = [...requiredRuleNames].sort().join('+')
+  const trades = results.filter((r) => r.signal === signalType && matches(r))
+  const exactOnly = trades.filter((t) => t.combo === exactCombo)
+  const dilutedOnly = trades.filter((t) => t.combo !== exactCombo)
+
+  const stats = (group) => {
+    if (group.length === 0) return { count: 0, winRate: 0, avgNetReturn: 0 }
+    const winRate = (group.filter((t) => t.correct).length / group.length) * 100
+    const avgNetReturn = group.reduce((s, t) => s + t.netReturnPct, 0) / group.length
+    return { count: group.length, winRate, avgNetReturn }
+  }
+
+  const all = stats(trades)
+  const exact = stats(exactOnly)
+  const diluted = stats(dilutedOnly)
+
+  console.log(`\n  -- superset test: ${label} (${signalType}, requires ${requiredRuleNames.join('+')} same-direction) --`)
+  console.log(`     exact match only:    n=${exact.count}, ${exact.winRate.toFixed(1)}% win, ${exact.avgNetReturn >= 0 ? '+' : ''}${exact.avgNetReturn.toFixed(3)}% net/trade`)
+  console.log(`     diluted (extra rules): n=${diluted.count}, ${diluted.winRate.toFixed(1)}% win, ${diluted.avgNetReturn >= 0 ? '+' : ''}${diluted.avgNetReturn.toFixed(3)}% net/trade`)
+  console.log(`     combined (superset):  n=${all.count}, ${all.winRate.toFixed(1)}% win, ${all.avgNetReturn >= 0 ? '+' : ''}${all.avgNetReturn.toFixed(3)}% net/trade`)
+}
+
+// Hypothesis #2: Fear & Greed has sat in a calm 27-73 band the entire live
+// period and never once crossed the current <25/>75 "extreme" thresholds --
+// so the fear_greed+taker_flow proven combo has fired zero times live. Tests
+// whether loosening the thresholds still produces a net-positive combo, by
+// replaying every window with fear_greed's score recomputed under each
+// candidate threshold (nothing else about the rule set changes).
+function backtestFearGreedThresholds(results, label, thresholds) {
+  const scoreAlt = (value, low, high) => {
+    if (value == null) return 0
+    if (value < low) return 1
+    if (value > high) return -1
+    return 0
+  }
+
+  console.log(`\n  -- Fear & Greed threshold sweep: ${label} --`)
+  for (const [low, high] of thresholds) {
+    const rows = []
+    for (const r of results) {
+      const originalTotal = r.rules.reduce((s, x) => s + x.score, 0)
+      const originalFg = r.rules.find((x) => x.rule === 'fear_greed').score
+      const newFg = scoreAlt(r.fearGreedValue, low, high)
+      const newTotal = originalTotal - originalFg + newFg
+      const newSignal = scoreToSignal(newTotal)
+      const newRules = r.rules.map((x) => (x.rule === 'fear_greed' ? { ...x, score: newFg } : x))
+      const newCombo = combinationKey(newRules)
+      rows.push({ signal: newSignal, combo: newCombo, rawPriceChangePct: r.rawPriceChangePct })
+    }
+
+    for (const signalType of ['bullish', 'bearish']) {
+      const exactCombo = ['fear_greed', 'taker_flow'].sort().join('+')
+      const trades = rows.filter((r) => r.signal === signalType && r.combo === exactCombo)
+      if (trades.length === 0) continue
+      const evalCorrect = (t) =>
+        signalType === 'bullish' ? t.rawPriceChangePct > 0 : t.rawPriceChangePct < 0
+      const winRate = (trades.filter(evalCorrect).length / trades.length) * 100
+      const avgNetReturn =
+        trades.reduce((s, t) => {
+          const tradeReturn = signalType === 'bearish' ? -t.rawPriceChangePct : t.rawPriceChangePct
+          return s + (tradeReturn - ROUND_TRIP_FEE_PCT)
+        }, 0) / trades.length
+      console.log(
+        `     low<${low} / high>${high}, ${signalType}: n=${trades.length}, ${winRate.toFixed(1)}% win, ${avgNetReturn >= 0 ? '+' : ''}${avgNetReturn.toFixed(3)}% net/trade`
+      )
+    }
   }
 }
 
@@ -869,8 +996,22 @@ async function main() {
   const snapshots = reconstructSnapshots(raw)
   console.log(`Reconstructed ${snapshots.length} aligned snapshots`)
 
-  backtestTimeframe(snapshots, WINDOW_HOURS, evaluateSignal, '4-Hour')
-  backtestTimeframe(snapshots, SHORT_WINDOW_HOURS, evaluateShortTermSignal, '1-Hour')
+  const results4h = backtestTimeframe(snapshots, WINDOW_HOURS, evaluateSignal, '4-Hour')
+  const results1h = backtestTimeframe(snapshots, SHORT_WINDOW_HOURS, evaluateShortTermSignal, '1-Hour')
+
+  reportSupersetCombo(results1h, 'bullish', ['oi_momentum', 'taker_flow'], '1-Hour')
+  reportSupersetCombo(results1h, 'bearish', ['oi_momentum', 'taker_flow'], '1-Hour')
+
+  const fgThresholds = [
+    [30, 70],
+    [35, 65],
+    [40, 60],
+  ]
+  backtestFearGreedThresholds(results4h, '4-Hour', fgThresholds)
+  backtestFearGreedThresholds(results1h, '1-Hour', fgThresholds)
+
+  reportComboWinLossSize(results4h, 'bullish', 'oi_price_trend+taker_flow', '4-Hour')
+
   backtestLiquidationTouchEvents(snapshots)
   backtestMomentumHypotheses(snapshots)
   backtestOiMomentumThresholds(snapshots)

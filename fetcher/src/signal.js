@@ -179,7 +179,7 @@ function scoreOpenInterestMomentum(oiChangePct) {
   return { rule, score: 0, reason: null }
 }
 
-function scoreToSignal(totalScore) {
+export function scoreToSignal(totalScore) {
   if (totalScore >= 2) return 'bullish'
   if (totalScore <= -2) return 'bearish'
   return 'neutral'
@@ -205,9 +205,15 @@ export function combinationKey(rules) {
 // rule that dominated 75-90% of all 1h calls) was removed -- sample sizes
 // are thinner than the 4h combo (n=13-26 vs n=30), so treat these as real
 // but less battle-tested; re-verify once more live history accumulates.
+//
+// oi_price_trend+taker_flow (4h bullish) added 2026-08-25 after live data
+// flagged it as promising: n=17, 58.8% win rate, +0.814% net/trade in the
+// 30-day backtest. Its bearish counterpart backtested net-negative
+// (n=18, -0.231%/trade) despite looking good in a smaller live sample --
+// deliberately NOT added, a reminder that small live samples can mislead.
 export const PROVEN_COMBOS = {
   '4h': {
-    bullish: ['fear_greed+taker_flow'],
+    bullish: ['fear_greed+taker_flow', 'oi_price_trend+taker_flow'],
     bearish: [],
   },
   '1h': {
@@ -229,7 +235,10 @@ function getConfidence(timeframe, signal, combo) {
 // Re-derive alongside PROVEN_COMBOS whenever backtest.js is rerun.
 const TRADE_LEVELS = {
   '4h': {
-    bullish: { 'fear_greed+taker_flow': { avgWinPct: 0.713, avgLossPct: -0.401 } },
+    bullish: {
+      'fear_greed+taker_flow': { avgWinPct: 0.713, avgLossPct: -0.401 },
+      'oi_price_trend+taker_flow': { avgWinPct: 1.951, avgLossPct: -0.566 },
+    },
     bearish: {},
   },
   '1h': {

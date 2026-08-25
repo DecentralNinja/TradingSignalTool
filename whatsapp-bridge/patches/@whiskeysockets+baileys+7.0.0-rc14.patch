@@ -1,0 +1,17 @@
+diff --git a/node_modules/@whiskeysockets/baileys/lib/Socket/newsletter.js b/node_modules/@whiskeysockets/baileys/lib/Socket/newsletter.js
+index 95f575e..1103ce1 100644
+--- a/node_modules/@whiskeysockets/baileys/lib/Socket/newsletter.js
++++ b/node_modules/@whiskeysockets/baileys/lib/Socket/newsletter.js
+@@ -14,10 +14,10 @@ const parseNewsletterCreateResponse = (response) => {
+         invite: thread.invite,
+         subscribers: parseInt(thread.subscribers_count, 10),
+         verification: thread.verification,
+-        picture: {
++        picture: thread.picture ? {
+             id: thread.picture.id,
+             directPath: thread.picture.direct_path
+-        },
++        } : null,
+         mute_state: viewer.mute
+     };
+ };
