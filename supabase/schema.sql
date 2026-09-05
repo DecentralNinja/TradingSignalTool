@@ -31,6 +31,7 @@ create table if not exists market_snapshots (
   cftc_lev_funds_long numeric,
   cftc_lev_funds_short numeric,
   cftc_lev_funds_long_short_ratio numeric,
+  gold_price numeric,
   created_at timestamptz not null default now(),
   unique (symbol, fetched_at)
 );

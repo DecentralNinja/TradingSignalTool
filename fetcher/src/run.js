@@ -9,6 +9,7 @@ import {
 import { getTicker as getBybitTicker, getLongShortRatio as getBybitLongShortRatio } from './bybit.js'
 import { getFearGreedIndex } from './fearGreed.js'
 import { getLeveragedFundsPositioning } from './cftc.js'
+import { getGoldPrice } from './gold.js'
 import {
   saveSnapshot,
   getRecentSnapshots,
@@ -65,7 +66,7 @@ async function safeFetch(promise, label, fallback) {
 }
 
 async function fetchSnapshot(symbol) {
-  const [price, oi, longShort, takerVol, topTrader, basis, bybitTicker, bybitLongShort, fearGreed, cftc] =
+  const [price, oi, longShort, takerVol, topTrader, basis, bybitTicker, bybitLongShort, fearGreed, cftc, gold] =
     await Promise.all([
       getMarkPriceAndFunding(symbol),
       getOpenInterest(symbol),
@@ -82,6 +83,10 @@ async function fetchSnapshot(symbol) {
         leveragedFundsShort: null,
         leveragedFundsLongShortRatio: null,
       }),
+      // Unofficial/undocumented Yahoo Finance endpoint (see gold.js) -- worth
+      // using given the backtested edge, but must not be able to take down
+      // the whole cycle if it breaks.
+      safeFetch(getGoldPrice(), 'getGoldPrice', { price: null }),
     ])
 
   return {
@@ -115,6 +120,7 @@ async function fetchSnapshot(symbol) {
     cftc_lev_funds_long: cftc.leveragedFundsLong,
     cftc_lev_funds_short: cftc.leveragedFundsShort,
     cftc_lev_funds_long_short_ratio: cftc.leveragedFundsLongShortRatio,
+    gold_price: gold.price,
   }
 }
 

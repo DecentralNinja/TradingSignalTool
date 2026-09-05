@@ -151,6 +151,30 @@ function scoreOpenInterestTrend(priceChangePct, oiChangePct) {
   return { rule, score: 0, reason: null }
 }
 
+// Gold and BTC both get bought for overlapping macro reasons (inflation
+// fear, dollar weakness, risk sentiment) without being driven by each other
+// -- a real, independent-of-BTC-market data source the rest of this rule set
+// has no visibility into. Backtested (30-day window, 2026-09-04): a >1% gold
+// move over the same 4h lookback predicted BTC's own next-4h direction 60.1%
+// of the time (n=143, +0.345% net/trade), and 119 of those cases were times
+// every other rule was completely silent -- gold catches real moves this
+// rule set otherwise misses entirely, not just echoing existing rules.
+// Weighted at 2 (double a normal rule) specifically because of that: it
+// needs to be able to cross the +-2 threshold alone, matching what was
+// actually tested (gold firing by itself, not stacked with something else).
+// 4h only -- the 1h version showed no edge in the same backtest.
+function scoreGoldMomentum(goldChangePct) {
+  const rule = 'gold_momentum'
+  if (goldChangePct == null) return { rule, score: 0, reason: null }
+  if (goldChangePct > 1) {
+    return { rule, score: 2, reason: `gold up ${goldChangePct.toFixed(2)}% in the window (broader risk/inflation flow BTC often follows)` }
+  }
+  if (goldChangePct < -1) {
+    return { rule, score: -2, reason: `gold down ${goldChangePct.toFixed(2)}% in the window (broader risk-off flow BTC often follows)` }
+  }
+  return { rule, score: 0, reason: null }
+}
+
 // price_momentum (raw hourly price change, +-0.25% threshold) was removed
 // after backtesting: it was the dominant combo in 75-90% of all 1h calls and
 // net-negative after fees in BOTH directions -- continuation 47.3% win rate
@@ -211,9 +235,21 @@ export function combinationKey(rules) {
 // 30-day backtest. Its bearish counterpart backtested net-negative
 // (n=18, -0.231%/trade) despite looking good in a smaller live sample --
 // deliberately NOT added, a reminder that small live samples can mislead.
+//
+// gold_momentum+taker_flow and gold_momentum+oi_price_trend+taker_flow (both
+// 4h bullish only) added 2026-09-05 after backtesting gold's price as a new,
+// independent rule (see scoreGoldMomentum) -- n=21 at 81.0% win/+1.159%
+// net/trade, and n=14 at 78.6% win/+1.240% net/trade respectively. The
+// bearish version of gold_momentum+taker_flow backtested badly (n=6, 16.7%
+// win, -0.413%/trade) -- deliberately NOT added.
 export const PROVEN_COMBOS = {
   '4h': {
-    bullish: ['fear_greed+taker_flow', 'oi_price_trend+taker_flow'],
+    bullish: [
+      'fear_greed+taker_flow',
+      'oi_price_trend+taker_flow',
+      'gold_momentum+taker_flow',
+      'gold_momentum+oi_price_trend+taker_flow',
+    ],
     bearish: [],
   },
   '1h': {
@@ -238,6 +274,8 @@ const TRADE_LEVELS = {
     bullish: {
       'fear_greed+taker_flow': { avgWinPct: 0.713, avgLossPct: -0.401 },
       'oi_price_trend+taker_flow': { avgWinPct: 1.951, avgLossPct: -0.566 },
+      'gold_momentum+taker_flow': { avgWinPct: 1.626, avgLossPct: -0.298 },
+      'gold_momentum+oi_price_trend+taker_flow': { avgWinPct: 1.789, avgLossPct: -0.304 },
     },
     bearish: {},
   },
@@ -333,6 +371,13 @@ function priceAndOiChange(snapshots) {
   }
 }
 
+function goldChange(snapshots) {
+  const earliest = snapshots[0]
+  const latest = snapshots[snapshots.length - 1]
+  if (earliest.gold_price == null || latest.gold_price == null) return null
+  return ((latest.gold_price - earliest.gold_price) / earliest.gold_price) * 100
+}
+
 // The original structural signal: latest-value rules plus the OI-vs-price
 // trend rule, evaluated over a 4-hour window. Volatility is computed by the
 // caller (run.js/backtest.js) and attached to the saved row directly, not
@@ -341,7 +386,11 @@ export function evaluateSignal(snapshots) {
   const latest = snapshots[snapshots.length - 1]
   const { priceChangePct, oiChangePct } = priceAndOiChange(snapshots)
 
-  const rules = [...latestValueRules(latest), scoreOpenInterestTrend(priceChangePct, oiChangePct)]
+  const rules = [
+    ...latestValueRules(latest),
+    scoreOpenInterestTrend(priceChangePct, oiChangePct),
+    scoreGoldMomentum(goldChange(snapshots)),
+  ]
 
   return summarize(rules, '4h')
 }

@@ -137,6 +137,27 @@ async function fetchCoinbaseCandles(startTime, endTime) {
   return results
 }
 
+// Yahoo Finance's chart endpoint is unofficial/undocumented (no key, but
+// also no guarantee it stays this way) -- worth using, not worth depending
+// on blindly. Both GC=F (COMEX gold futures) and DX-Y.NYB (ICE US Dollar
+// Index) only trade during weekday market hours, unlike BTC -- there are
+// real gaps (weekends) makeLookup's forward-fill will bridge over,
+// acceptable for a 4h-scale hypothesis, not for anything needing their own
+// intra-gap moves.
+async function fetchYahooCandles(symbol, startTime, endTime) {
+  const rangeDays = Math.ceil((endTime - startTime) / (24 * 60 * 60 * 1000))
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=15m&range=${rangeDays}d`
+  const res = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } })
+  if (!res.ok) throw new Error(`${url} failed: ${res.status} ${await res.text()}`)
+  const data = await res.json()
+  const result = data.chart.result[0]
+  const timestamps = result.timestamp
+  const closes = result.indicators.quote[0].close
+  return timestamps
+    .map((t, i) => ({ timestamp: t * 1000, close: closes[i] }))
+    .filter((p) => p.close != null)
+}
+
 async function fetchAllHistoricalData() {
   const endTime = Date.now()
   const startTime = endTime - DAYS_BACK * 24 * 60 * 60 * 1000
@@ -230,6 +251,22 @@ async function fetchAllHistoricalData() {
     console.log(`  coinbase fetch failed, continuing without it: ${err.message}`)
   }
 
+  console.log('Fetching gold (GC=F) history from Yahoo Finance...')
+  let gold = []
+  try {
+    gold = await cached('gold', () => fetchYahooCandles('GC=F', startTime, endTime))
+  } catch (err) {
+    console.log(`  gold fetch failed, continuing without it: ${err.message}`)
+  }
+
+  console.log('Fetching US Dollar Index (DXY) history from Yahoo Finance...')
+  let dxy = []
+  try {
+    dxy = await cached('dxy', () => fetchYahooCandles('DX-Y.NYB', startTime, endTime))
+  } catch (err) {
+    console.log(`  DXY fetch failed, continuing without it: ${err.message}`)
+  }
+
   return {
     klines,
     fundingRates,
@@ -240,6 +277,8 @@ async function fetchAllHistoricalData() {
     coinbase,
     basis,
     fearGreed: fearGreedRaw.data,
+    gold,
+    dxy,
   }
 }
 
@@ -268,6 +307,8 @@ function reconstructSnapshots(raw) {
   const basisLookup = makeLookup(raw.basis, (r) => r.timestamp)
   const fearGreedLookup = makeLookup(raw.fearGreed, (r) => Number(r.timestamp) * 1000)
   const coinbaseLookup = makeLookup(raw.coinbase ?? [], (r) => r.timestamp)
+  const goldLookup = makeLookup(raw.gold ?? [], (r) => r.timestamp)
+  const dxyLookup = makeLookup(raw.dxy ?? [], (r) => r.timestamp)
 
   const snapshots = []
 
@@ -281,6 +322,8 @@ function reconstructSnapshots(raw) {
     const basisEntry = basisLookup(t)
     const fearGreed = fearGreedLookup(t)
     const coinbase = coinbaseLookup(t)
+    const gold = goldLookup(t)
+    const dxy = dxyLookup(t)
 
     if (!oi || !longShort || !taker) continue
 
@@ -291,6 +334,8 @@ function reconstructSnapshots(raw) {
       fetched_at: new Date(t).toISOString(),
       mark_price: binancePrice,
       coinbase_premium_pct: coinbasePremiumPct,
+      gold_price: gold ? gold.close : null,
+      dxy_price: dxy ? dxy.close : null,
       funding_rate: funding ? Number(funding.fundingRate) : 0,
       open_interest: Number(oi.sumOpenInterest),
       long_short_ratio: Number(longShort.longShortRatio),
@@ -1030,10 +1075,275 @@ function backtestCoinbasePremium(snapshots) {
   }
 }
 
+// Tests the "gold drives other assets" idea directly: does gold's own
+// recent price move (over the same lookback as the outcome horizon) predict
+// BTC's next move in the same direction (confirm, "gold up = risk-on/
+// inflation-hedge demand = BTC up too") or the opposite (contrarian, "gold
+// up = risk-off flight to safety = BTC down")? Neither assumed -- same
+// threshold-sweep discipline as the Coinbase Premium test above.
+function backtestGoldCorrelation(snapshots) {
+  const withGold = snapshots.filter((s) => s.gold_price != null)
+  if (withGold.length === 0) {
+    console.log('\n=== Gold correlation test: no data (fetch may have failed) ===')
+    return
+  }
+  console.log(`\n(Gold price available for ${withGold.length}/${snapshots.length} snapshots)`)
+
+  const thresholds = [0.1, 0.25, 0.5, 1]
+
+  for (const horizonHours of [SHORT_WINDOW_HOURS, WINDOW_HOURS]) {
+    console.log(`\n=== Gold correlation test (${horizonHours}h outcome, gold's own move over the same lookback) ===`)
+    for (const threshold of thresholds) {
+      const buckets = { confirm: [], contrarian: [] }
+
+      for (let i = 0; i < snapshots.length; i++) {
+        const evalTime = new Date(snapshots[i].fetched_at).getTime()
+        const lookbackIndex = snapshots.findIndex(
+          (s) => new Date(s.fetched_at).getTime() >= evalTime - horizonHours * 60 * 60 * 1000
+        )
+        if (lookbackIndex === -1 || lookbackIndex === i) continue
+        const goldThen = snapshots[lookbackIndex].gold_price
+        const goldNow = snapshots[i].gold_price
+        if (goldThen == null || goldNow == null) continue
+
+        const goldChangePct = ((goldNow - goldThen) / goldThen) * 100
+        if (Math.abs(goldChangePct) <= threshold) continue
+
+        const outcomeIndex = snapshots.findIndex(
+          (s) => new Date(s.fetched_at).getTime() >= evalTime + horizonHours * 60 * 60 * 1000
+        )
+        if (outcomeIndex === -1) continue
+
+        const confirmSignal = goldChangePct > 0 ? 'bullish' : 'bearish'
+        const contrarianSignal = confirmSignal === 'bullish' ? 'bearish' : 'bullish'
+
+        for (const [key, signal] of [['confirm', confirmSignal], ['contrarian', contrarianSignal]]) {
+          const { correct, priceChangePct } = evaluateOutcome(signal, snapshots[i].mark_price, snapshots[outcomeIndex].mark_price)
+          const tradeReturnPct = signal === 'bearish' ? -priceChangePct : priceChangePct
+          const netReturnPct = tradeReturnPct - ROUND_TRIP_FEE_PCT
+          buckets[key].push({ correct, tradeReturnPct, netReturnPct })
+        }
+      }
+
+      for (const key of ['confirm', 'contrarian']) {
+        const trades = buckets[key]
+        if (trades.length < MIN_COMBO_SAMPLE) continue
+        const wins = trades.filter((t) => t.correct).length
+        const avgNet = trades.reduce((s, t) => s + t.netReturnPct, 0) / trades.length
+        const avgGross = trades.reduce((s, t) => s + t.tradeReturnPct, 0) / trades.length
+        console.log(
+          `  [${key}] |gold move|>${threshold}%: n=${trades.length} | win rate ${((wins / trades.length) * 100).toFixed(1)}% | gross ${avgGross >= 0 ? '+' : ''}${avgGross.toFixed(3)}% | NET ${avgNet >= 0 ? '+' : ''}${avgNet.toFixed(3)}%`
+        )
+      }
+    }
+  }
+}
+
+// Does gold's >1%/4h confirm signal add NEW information, or just echo what
+// existing rules already catch on the same generally-volatile days? Splits
+// 4h outcomes into: existing rule set already bullish/bearish AND gold
+// agrees (does gold add anything ON TOP of an existing call?), existing
+// rule set already bullish/bearish but gold does NOT agree (does gold ever
+// disagree with a call that still wins?), and existing rule set neutral but
+// gold alone confirms strongly (does gold ever catch something the current
+// system misses entirely?).
+function backtestGoldIndependence(snapshots) {
+  const GOLD_THRESHOLD = 1
+  const buckets = { existingAgrees: [], existingDisagrees: [], goldOnly: [] }
+
+  for (let i = 0; i < snapshots.length; i++) {
+    const window = windowSlice(snapshots, i, WINDOW_HOURS)
+    if (window.length < 2) continue
+
+    const { signal: existingSignal } = evaluateSignal(window)
+
+    const evalTime = new Date(snapshots[i].fetched_at).getTime()
+    const lookbackIndex = snapshots.findIndex(
+      (s) => new Date(s.fetched_at).getTime() >= evalTime - WINDOW_HOURS * 60 * 60 * 1000
+    )
+    if (lookbackIndex === -1 || lookbackIndex === i) continue
+    const goldThen = snapshots[lookbackIndex].gold_price
+    const goldNow = snapshots[i].gold_price
+    if (goldThen == null || goldNow == null) continue
+    const goldChangePct = ((goldNow - goldThen) / goldThen) * 100
+    const goldSignal = Math.abs(goldChangePct) > GOLD_THRESHOLD ? (goldChangePct > 0 ? 'bullish' : 'bearish') : null
+
+    const outcomeIndex = snapshots.findIndex(
+      (s) => new Date(s.fetched_at).getTime() >= evalTime + WINDOW_HOURS * 60 * 60 * 1000
+    )
+    if (outcomeIndex === -1) continue
+
+    const record = (bucket, signal) => {
+      const { correct, priceChangePct } = evaluateOutcome(signal, snapshots[i].mark_price, snapshots[outcomeIndex].mark_price)
+      const tradeReturnPct = signal === 'bearish' ? -priceChangePct : priceChangePct
+      const netReturnPct = tradeReturnPct - ROUND_TRIP_FEE_PCT
+      bucket.push({ correct, netReturnPct })
+    }
+
+    if (existingSignal !== 'neutral') {
+      if (goldSignal === existingSignal) record(buckets.existingAgrees, existingSignal)
+      else record(buckets.existingDisagrees, existingSignal)
+    } else if (goldSignal != null) {
+      record(buckets.goldOnly, goldSignal)
+    }
+  }
+
+  console.log(`\n=== Gold independence test: 4h (does gold add anything beyond the existing rule set?) ===`)
+  for (const [label, trades] of Object.entries(buckets)) {
+    if (trades.length === 0) {
+      console.log(`  ${label}: never occurred`)
+      continue
+    }
+    const wins = trades.filter((t) => t.correct).length
+    const avgNet = trades.reduce((s, t) => s + t.netReturnPct, 0) / trades.length
+    console.log(
+      `  ${label}: n=${trades.length} | win rate ${((wins / trades.length) * 100).toFixed(1)}% | NET ${avgNet >= 0 ? '+' : ''}${avgNet.toFixed(3)}%`
+    )
+  }
+}
+
+// Same two tests as gold (confirm/contrarian correlation, then independence
+// from the existing rule set), applied to the US Dollar Index. DXY moving
+// broadly affects USD-denominated risk assets, so the a priori expectation
+// (not assumed, tested) leans toward DXY as a CONTRARIAN driver -- dollar
+// strength typically pressures risk assets including BTC -- opposite of
+// gold's expected "risk-on confirms" direction.
+//
+// Status as of the 2026-09-04 backtest: promising but NOT wired into
+// signal.js, unlike gold_momentum -- at |DXY move|>0.25%/4h, contrarian hit
+// 59.7% win/+0.670% net (n=72), and n=58 of those were cases the existing
+// rule set caught nothing at all (real independent signal, not an echo).
+// But those events cluster into only 8 distinct days out of 30 (two of
+// those days alone account for nearly half), a much thinner spread than
+// gold's 18/30 days -- the same kind of clustering trap that inflated the
+// "European session" and (partially) Coinbase Premium findings earlier in
+// this project. Worth re-checking once more live history accumulates, not
+// worth trusting yet at this spread.
+function backtestDxyCorrelation(snapshots) {
+  const withDxy = snapshots.filter((s) => s.dxy_price != null)
+  if (withDxy.length === 0) {
+    console.log('\n=== DXY correlation test: no data (fetch may have failed) ===')
+    return
+  }
+  console.log(`\n(DXY price available for ${withDxy.length}/${snapshots.length} snapshots)`)
+
+  const thresholds = [0.1, 0.25, 0.5, 1]
+
+  for (const horizonHours of [SHORT_WINDOW_HOURS, WINDOW_HOURS]) {
+    console.log(`\n=== DXY correlation test (${horizonHours}h outcome, DXY's own move over the same lookback) ===`)
+    for (const threshold of thresholds) {
+      const buckets = { confirm: [], contrarian: [] }
+
+      for (let i = 0; i < snapshots.length; i++) {
+        const evalTime = new Date(snapshots[i].fetched_at).getTime()
+        const lookbackIndex = snapshots.findIndex(
+          (s) => new Date(s.fetched_at).getTime() >= evalTime - horizonHours * 60 * 60 * 1000
+        )
+        if (lookbackIndex === -1 || lookbackIndex === i) continue
+        const dxyThen = snapshots[lookbackIndex].dxy_price
+        const dxyNow = snapshots[i].dxy_price
+        if (dxyThen == null || dxyNow == null) continue
+
+        const dxyChangePct = ((dxyNow - dxyThen) / dxyThen) * 100
+        if (Math.abs(dxyChangePct) <= threshold) continue
+
+        const outcomeIndex = snapshots.findIndex(
+          (s) => new Date(s.fetched_at).getTime() >= evalTime + horizonHours * 60 * 60 * 1000
+        )
+        if (outcomeIndex === -1) continue
+
+        // "confirm" here means DXY up -> BTC bullish (same direction), just
+        // like the gold test's labeling -- not an assumption about which
+        // bucket wins.
+        const confirmSignal = dxyChangePct > 0 ? 'bullish' : 'bearish'
+        const contrarianSignal = confirmSignal === 'bullish' ? 'bearish' : 'bullish'
+
+        for (const [key, signal] of [['confirm', confirmSignal], ['contrarian', contrarianSignal]]) {
+          const { correct, priceChangePct } = evaluateOutcome(signal, snapshots[i].mark_price, snapshots[outcomeIndex].mark_price)
+          const tradeReturnPct = signal === 'bearish' ? -priceChangePct : priceChangePct
+          const netReturnPct = tradeReturnPct - ROUND_TRIP_FEE_PCT
+          buckets[key].push({ correct, tradeReturnPct, netReturnPct })
+        }
+      }
+
+      for (const key of ['confirm', 'contrarian']) {
+        const trades = buckets[key]
+        if (trades.length < MIN_COMBO_SAMPLE) continue
+        const wins = trades.filter((t) => t.correct).length
+        const avgNet = trades.reduce((s, t) => s + t.netReturnPct, 0) / trades.length
+        const avgGross = trades.reduce((s, t) => s + t.tradeReturnPct, 0) / trades.length
+        console.log(
+          `  [${key}] |DXY move|>${threshold}%: n=${trades.length} | win rate ${((wins / trades.length) * 100).toFixed(1)}% | gross ${avgGross >= 0 ? '+' : ''}${avgGross.toFixed(3)}% | NET ${avgNet >= 0 ? '+' : ''}${avgNet.toFixed(3)}%`
+        )
+      }
+    }
+  }
+}
+
+// Same independence check as gold: does DXY add anything beyond what the
+// existing rule set already catches?
+function backtestDxyIndependence(snapshots) {
+  const DXY_THRESHOLD = 0.25
+  const buckets = { existingAgrees: [], existingDisagrees: [], dxyOnly: [] }
+
+  for (let i = 0; i < snapshots.length; i++) {
+    const window = windowSlice(snapshots, i, WINDOW_HOURS)
+    if (window.length < 2) continue
+
+    const { signal: existingSignal } = evaluateSignal(window)
+
+    const evalTime = new Date(snapshots[i].fetched_at).getTime()
+    const lookbackIndex = snapshots.findIndex(
+      (s) => new Date(s.fetched_at).getTime() >= evalTime - WINDOW_HOURS * 60 * 60 * 1000
+    )
+    if (lookbackIndex === -1 || lookbackIndex === i) continue
+    const dxyThen = snapshots[lookbackIndex].dxy_price
+    const dxyNow = snapshots[i].dxy_price
+    if (dxyThen == null || dxyNow == null) continue
+    const dxyChangePct = ((dxyNow - dxyThen) / dxyThen) * 100
+    // Contrarian direction used here since that's what the correlation test
+    // above is expected to favor (dollar strength pressures BTC) -- if the
+    // correlation test instead shows confirm winning, flip this.
+    const dxySignal = Math.abs(dxyChangePct) > DXY_THRESHOLD ? (dxyChangePct > 0 ? 'bearish' : 'bullish') : null
+
+    const outcomeIndex = snapshots.findIndex(
+      (s) => new Date(s.fetched_at).getTime() >= evalTime + WINDOW_HOURS * 60 * 60 * 1000
+    )
+    if (outcomeIndex === -1) continue
+
+    const record = (bucket, signal) => {
+      const { correct, priceChangePct } = evaluateOutcome(signal, snapshots[i].mark_price, snapshots[outcomeIndex].mark_price)
+      const tradeReturnPct = signal === 'bearish' ? -priceChangePct : priceChangePct
+      const netReturnPct = tradeReturnPct - ROUND_TRIP_FEE_PCT
+      bucket.push({ correct, netReturnPct })
+    }
+
+    if (existingSignal !== 'neutral') {
+      if (dxySignal === existingSignal) record(buckets.existingAgrees, existingSignal)
+      else record(buckets.existingDisagrees, existingSignal)
+    } else if (dxySignal != null) {
+      record(buckets.dxyOnly, dxySignal)
+    }
+  }
+
+  console.log(`\n=== DXY independence test: 4h (does DXY add anything beyond the existing rule set?) ===`)
+  for (const [label, trades] of Object.entries(buckets)) {
+    if (trades.length === 0) {
+      console.log(`  ${label}: never occurred`)
+      continue
+    }
+    const wins = trades.filter((t) => t.correct).length
+    const avgNet = trades.reduce((s, t) => s + t.netReturnPct, 0) / trades.length
+    console.log(
+      `  ${label}: n=${trades.length} | win rate ${((wins / trades.length) * 100).toFixed(1)}% | NET ${avgNet >= 0 ? '+' : ''}${avgNet.toFixed(3)}%`
+    )
+  }
+}
+
 async function main() {
   const raw = await fetchAllHistoricalData()
   console.log(
-    `\nFetched: ${raw.klines.length} klines, ${raw.fundingRates.length} funding, ${raw.openInterest.length} OI, ${raw.longShort.length} long/short, ${raw.topTrader.length} top trader, ${raw.takerFlow.length} taker, ${raw.basis.length} basis, ${raw.fearGreed.length} fear/greed`
+    `\nFetched: ${raw.klines.length} klines, ${raw.fundingRates.length} funding, ${raw.openInterest.length} OI, ${raw.longShort.length} long/short, ${raw.topTrader.length} top trader, ${raw.takerFlow.length} taker, ${raw.basis.length} basis, ${raw.fearGreed.length} fear/greed, ${raw.gold.length} gold, ${raw.dxy.length} DXY`
   )
 
   const snapshots = reconstructSnapshots(raw)
@@ -1054,6 +1364,8 @@ async function main() {
   backtestFearGreedThresholds(results1h, '1-Hour', fgThresholds)
 
   reportComboWinLossSize(results4h, 'bullish', 'oi_price_trend+taker_flow', '4-Hour')
+  reportComboWinLossSize(results4h, 'bullish', 'gold_momentum+taker_flow', '4-Hour')
+  reportComboWinLossSize(results4h, 'bullish', 'gold_momentum+oi_price_trend+taker_flow', '4-Hour')
 
   reportWhatsAppAlertPerformance(results4h, '4-Hour')
   reportWhatsAppAlertPerformance(results1h, '1-Hour')
@@ -1064,6 +1376,10 @@ async function main() {
   backtestConfluence(snapshots)
   backtestPairwiseCombos(snapshots)
   backtestCoinbasePremium(snapshots)
+  backtestGoldCorrelation(snapshots)
+  backtestGoldIndependence(snapshots)
+  backtestDxyCorrelation(snapshots)
+  backtestDxyIndependence(snapshots)
 }
 
 main().catch((err) => {
