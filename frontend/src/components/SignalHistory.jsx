@@ -13,30 +13,32 @@ export function SignalHistory({ history }) {
   }
 
   return (
-    <table className="signal-history">
-      <thead>
-        <tr>
-          <th>Time</th>
-          <th>Signal</th>
-          <th>Reason</th>
-        </tr>
-      </thead>
-      <tbody>
-        {history.map((row) => {
-          const meta = SIGNAL_META[row.signal] ?? SIGNAL_META.neutral
-          return (
-            <tr key={row.id}>
-              <td className="tabular-nums">{formatDateTime(row.evaluated_at)}</td>
-              <td>
-                <span className={`signal-history__badge signal-history__badge--${meta.className}`}>
-                  {meta.label}
-                </span>
-              </td>
-              <td className="signal-history__reason">{row.reason}</td>
-            </tr>
-          )
-        })}
-      </tbody>
-    </table>
+    <div className="signal-history__scroll">
+      <table className="signal-history">
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>Signal</th>
+            <th>Reason</th>
+          </tr>
+        </thead>
+        <tbody>
+          {history.map((row) => {
+            const meta = SIGNAL_META[row.signal] ?? SIGNAL_META.neutral
+            return (
+              <tr key={row.id}>
+                <td className="tabular-nums">{formatDateTime(row.evaluated_at)}</td>
+                <td>
+                  <span className={`signal-history__badge signal-history__badge--${meta.className}`}>
+                    {meta.label}
+                  </span>
+                </td>
+                <td className="signal-history__reason">{row.reason}</td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+    </div>
   )
 }

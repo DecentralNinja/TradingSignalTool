@@ -1,5 +1,12 @@
+.signal-history__scroll {
+  overflow-x: auto;
+  max-height: 420px;
+  overflow-y: auto;
+}
+
 .signal-history {
   width: 100%;
+  min-width: 420px;
   border-collapse: collapse;
   font-size: 14px;
 
