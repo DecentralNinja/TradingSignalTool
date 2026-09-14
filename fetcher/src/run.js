@@ -204,6 +204,8 @@ async function runTimeframe(client, snapshot, { timeframe, windowHours, evaluate
     exit_by_hours: tradeLevels?.exitByHours ?? null,
     take_profit_pct: tradeLevels?.avgWinPct ?? null,
     stop_loss_pct: tradeLevels?.avgLossPct ?? null,
+    position_size_label: tradeLevels?.positionSizeLabel ?? null,
+    position_size_pct: tradeLevels?.positionSizePct ?? null,
   }
 
   // WhatsApp alert only for a NEW proven bullish/bearish call -- not neutral
@@ -223,6 +225,7 @@ async function runTimeframe(client, snapshot, { timeframe, windowHours, evaluate
       message += `\n\nTP: $${tradeLevels.takeProfitPrice.toLocaleString('en-US', { maximumFractionDigits: 0 })} (${fmtPct(tradeLevels.avgWinPct)}, ${fmtRoi(tpRoi)})`
       message += `\nSL: $${tradeLevels.stopLossPrice.toLocaleString('en-US', { maximumFractionDigits: 0 })} (${fmtPct(tradeLevels.avgLossPct)}, ${fmtRoi(slRoi)})`
       message += `\nExit by: ${tradeLevels.exitByHours}h if neither hit`
+      message += `\nSize: ${tradeLevels.positionSizeLabel} (${tradeLevels.positionSizePct}%) — based on this combo's own reward:risk`
     }
 
     await sendWhatsApp(message)

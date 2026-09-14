@@ -290,6 +290,21 @@ const TRADE_LEVELS = {
   },
 }
 
+// Not every proven combo is an equally strong edge -- reward:risk (avg win
+// size / avg loss size) ranges from 0.9:1 (1h bullish oi_momentum+taker_flow,
+// only net-positive because it wins often enough) up to 5.9:1 (the best gold
+// combo). Sizing every trade the same treats those as equally trustworthy
+// when they aren't. Tiers are a simple, transparent split of that real
+// spread, not a guess: >=3 is comfortably the strong half of what's actually
+// proven, <1.2 is the one combo whose edge comes from win rate rather than
+// win size and so deserves less riding on any single trade.
+function suggestPositionSize(avgWinPct, avgLossPct) {
+  const rewardToRisk = avgWinPct / Math.abs(avgLossPct)
+  if (rewardToRisk >= 3) return { label: 'Full size', pct: 100 }
+  if (rewardToRisk >= 1.2) return { label: 'Standard size', pct: 75 }
+  return { label: 'Reduced size', pct: 50 }
+}
+
 // Suggests concrete take-profit/stop-loss price levels for a proven signal,
 // sized off the historical average win/loss for that exact combo -- not a
 // guess, the same numbers backing PROVEN_COMBOS. Returns null for anything
@@ -303,6 +318,7 @@ export function suggestTradeLevels(timeframe, signal, combo, entryPrice) {
   const takeProfitPrice = entryPrice * (1 + (directionMult * levels.avgWinPct) / 100)
   const stopLossPrice = entryPrice * (1 + (directionMult * levels.avgLossPct) / 100)
   const exitByHours = timeframe === '4h' ? WINDOW_HOURS : SHORT_WINDOW_HOURS
+  const positionSize = suggestPositionSize(levels.avgWinPct, levels.avgLossPct)
 
   return {
     takeProfitPrice,
@@ -310,6 +326,8 @@ export function suggestTradeLevels(timeframe, signal, combo, entryPrice) {
     exitByHours,
     avgWinPct: levels.avgWinPct,
     avgLossPct: levels.avgLossPct,
+    positionSizeLabel: positionSize.label,
+    positionSizePct: positionSize.pct,
   }
 }
 

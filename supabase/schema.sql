@@ -62,6 +62,8 @@ create table if not exists signals (
   exit_by_hours numeric,
   take_profit_pct numeric,
   stop_loss_pct numeric,
+  position_size_label text,
+  position_size_pct numeric,
   created_at timestamptz not null default now()
 );
 

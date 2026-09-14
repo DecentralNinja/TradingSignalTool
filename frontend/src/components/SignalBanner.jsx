@@ -86,6 +86,11 @@ export function SignalBanner({ signal }) {
             {signal.exit_by_hours != null && (
               <span className="signal-banner__levels-exit">Exit by {signal.exit_by_hours}h if neither hit</span>
             )}
+            {signal.position_size_label != null && (
+              <span className="signal-banner__levels-exit">
+                {signal.position_size_label} ({signal.position_size_pct}%) — based on this combo's own reward:risk
+              </span>
+            )}
           </div>
         )}
         <p className="signal-banner__timestamp">
