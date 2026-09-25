@@ -142,6 +142,19 @@ app.post('/trade/open', requireOwner, async (req, res) => {
     if (!signal) return res.status(404).json({ error: 'signal not found' })
     if (signal.signal === 'neutral') return res.status(400).json({ error: 'signal is neutral, nothing to trade' })
 
+    // Signals go stale -- exit_by_hours is how long the setup is meant to
+    // stay valid. Past that, the TP/SL levels no longer relate to where
+    // price actually is (Bitget itself rejects a TP that's already been
+    // passed), so refuse with a clear reason instead of a raw exchange error.
+    if (signal.exit_by_hours) {
+      const ageHours = (Date.now() - new Date(signal.evaluated_at).getTime()) / (1000 * 60 * 60)
+      if (ageHours > signal.exit_by_hours) {
+        return res.status(400).json({
+          error: `This signal expired ${(ageHours - signal.exit_by_hours).toFixed(1)}h ago -- its price target is no longer valid. Wait for a fresh signal.`,
+        })
+      }
+    }
+
     const direction = signal.signal === 'bullish' ? 'long' : 'short'
     const snapshot = await db.getLatestSnapshot()
     const entryPrice = snapshot?.mark_price

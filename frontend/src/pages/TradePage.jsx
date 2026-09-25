@@ -89,6 +89,8 @@ function TradeContent({ session }) {
   }
 
   const direction = signal.signal === 'bullish' ? 'Long' : signal.signal === 'bearish' ? 'Short' : 'Neutral'
+  const ageHours = (Date.now() - new Date(signal.evaluated_at).getTime()) / (1000 * 60 * 60)
+  const isExpired = signal.exit_by_hours != null && ageHours > signal.exit_by_hours
   const livePnlPct =
     trade?.status === 'open' && livePrice != null
       ? ((livePrice - trade.entry_price) / trade.entry_price) * 100 * (trade.direction === 'long' ? 1 : -1)
@@ -120,7 +122,12 @@ function TradeContent({ session }) {
 
       {error && <p className="trade-page__error">{error}</p>}
 
-      {!trade || trade.status === 'failed' ? (
+      {(!trade || trade.status === 'failed') && isExpired ? (
+        <p className="trade-page__expired">
+          This signal expired {(ageHours - signal.exit_by_hours).toFixed(1)}h ago — its price target is no
+          longer valid. Wait for a fresh signal instead of taking this one.
+        </p>
+      ) : !trade || trade.status === 'failed' ? (
         <button className="trade-page__btn trade-page__btn--open" onClick={handleOpen} disabled={busy}>
           {busy ? 'Opening…' : 'Take Trade'}
         </button>
