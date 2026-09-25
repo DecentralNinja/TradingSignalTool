@@ -78,6 +78,20 @@ startSocket()
 const app = express()
 app.use(express.json())
 
+// The dashboard (Vercel, a different origin) calls /trade/* directly from
+// the browser, so it needs an explicit CORS allowance -- only for that
+// route, everything still requires a valid Supabase session on top of this.
+const DASHBOARD_ORIGIN = process.env.DASHBOARD_URL
+app.use((req, res, next) => {
+  if (DASHBOARD_ORIGIN) {
+    res.header('Access-Control-Allow-Origin', DASHBOARD_ORIGIN)
+    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization')
+    res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+  }
+  if (req.method === 'OPTIONS') return res.sendStatus(204)
+  next()
+})
+
 app.post('/send', async (req, res) => {
   if (req.get('x-bridge-secret') !== BRIDGE_SECRET) {
     return res.status(401).json({ error: 'unauthorized' })
