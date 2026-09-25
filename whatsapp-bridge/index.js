@@ -191,11 +191,15 @@ app.post('/trade/close', requireOwner, async (req, res) => {
 
     await bitget.closePosition({ symbol: trade.symbol, direction: trade.direction, qty: trade.qty })
 
-    const snapshot = await db.getLatestSnapshot()
-    const exitPrice = snapshot?.mark_price
-    const priceChangePct = exitPrice ? ((exitPrice - trade.entry_price) / trade.entry_price) * 100 : null
-    const pnlPct = priceChangePct != null ? (trade.direction === 'long' ? priceChangePct : -priceChangePct) : null
-    const pnlUsd = pnlPct != null ? (trade.margin_usd * pnlPct) / 100 : null
+    // Read back the fill we just caused to get the real exit price/PnL
+    // (fees included) instead of approximating from our own price feed.
+    const fills = await bitget.getFills({ symbol: trade.symbol })
+    const closingFill = fills.find(
+      (f) => f.posSide === trade.direction && f.tradeSide?.startsWith('close_')
+    )
+    const exitPrice = closingFill ? Number(closingFill.execPrice) : null
+    const pnlUsd = closingFill ? Number(closingFill.execPnl) : null
+    const pnlPct = pnlUsd != null && trade.margin_usd ? (pnlUsd / trade.margin_usd) * 100 : null
 
     const updated = await db.updateTrade(trade.id, {
       status: 'closed_manual',
@@ -210,6 +214,77 @@ app.post('/trade/close', requireOwner, async (req, res) => {
     res.status(500).json({ error: err.message })
   }
 })
+
+// Bitget's own exchange-side TP/SL can close a position at any moment,
+// independent of this server or the dashboard being open at all (that's the
+// whole point of putting the stop-loss on the exchange, not in our code).
+// This polls every 45s so the trades table -- and the dashboard -- catch up
+// with reality instead of showing a trade as "open" forever after that.
+async function reconcileOpenTrades() {
+  let openTrades
+  try {
+    openTrades = await db.getOpenTrades()
+  } catch (err) {
+    console.error('Reconcile: failed to load open trades:', err.message)
+    return
+  }
+  if (!openTrades.length) return
+
+  const bySymbol = {}
+  for (const trade of openTrades) {
+    bySymbol[trade.symbol] = bySymbol[trade.symbol] || []
+    bySymbol[trade.symbol].push(trade)
+  }
+
+  for (const [symbol, trades] of Object.entries(bySymbol)) {
+    let positions
+    try {
+      positions = await bitget.getPositions({ symbol })
+    } catch (err) {
+      console.error(`Reconcile: failed to fetch ${symbol} positions:`, err.message)
+      continue
+    }
+
+    for (const trade of trades) {
+      // A closed position simply stops appearing in this list at all -- more
+      // reliable than trusting an exact size-field name we haven't verified
+      // against a live response (Bitget's docs didn't confirm it cleanly).
+      const stillOpen = positions.some((p) => (p.posSide || p.holdSide) === trade.direction)
+      if (stillOpen) continue
+
+      try {
+        // Pull the exact closing fill from Bitget rather than approximating
+        // from our own live price feed, which drifts from the real close
+        // price the longer this poll takes to catch it.
+        const fills = await bitget.getFills({ symbol })
+        const openedAtMs = new Date(trade.opened_at).getTime()
+        const closingFill = fills.find(
+          (f) =>
+            f.posSide === trade.direction &&
+            f.tradeSide?.startsWith('close_') &&
+            Number(f.createdTime) >= openedAtMs
+        )
+
+        const exitPrice = closingFill ? Number(closingFill.execPrice) : null
+        const pnlUsd = closingFill ? Number(closingFill.execPnl) : null
+        const pnlPct = pnlUsd != null && trade.margin_usd ? (pnlUsd / trade.margin_usd) * 100 : null
+
+        await db.updateTrade(trade.id, {
+          status: pnlUsd != null && pnlUsd >= 0 ? 'closed_won' : 'closed_lost',
+          exit_price: exitPrice,
+          pnl_pct: pnlPct,
+          pnl_usd: pnlUsd,
+          closed_at: new Date().toISOString(),
+        })
+        console.log(`Reconciled trade ${trade.id}: closed on Bitget's side (TP/SL hit)`)
+      } catch (err) {
+        console.error(`Reconcile: failed to update trade ${trade.id}:`, err.message)
+      }
+    }
+  }
+}
+
+setInterval(() => reconcileOpenTrades().catch((err) => console.error('Reconcile failed:', err.message)), 45000)
 
 app.listen(PORT, () => {
   console.log(`Bridge HTTP server listening on port ${PORT}`)

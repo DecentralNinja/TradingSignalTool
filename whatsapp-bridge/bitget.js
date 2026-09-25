@@ -89,10 +89,21 @@ async function closePosition({ symbol, direction, qty }) {
   return bitgetRequest('POST', '/api/v3/trade/place-order', { body })
 }
 
-async function getPosition({ symbol }) {
+// Returns every open position for this symbol (hedge-mode accounts can hold
+// a long AND a short at once), so callers must filter by posSide themselves.
+async function getPositions({ symbol }) {
   const query = `category=USDT-FUTURES&symbol=${symbol}`
-  const data = await bitgetRequest('GET', '/api/v3/position/single-position', { query })
-  return Array.isArray(data) ? data[0] : data
+  const data = await bitgetRequest('GET', '/api/v3/position/current-position', { query })
+  return data?.list || []
 }
 
-module.exports = { openPosition, closePosition, getPosition, IS_DEMO }
+// Recent fills, newest first -- used to find the exact price/PnL of a
+// position that Bitget closed on its own (TP/SL hit), rather than
+// approximating from our own live price feed after the fact.
+async function getFills({ symbol, limit = 20 }) {
+  const query = `category=USDT-FUTURES&symbol=${symbol}&limit=${limit}`
+  const data = await bitgetRequest('GET', '/api/v3/trade/fills', { query })
+  return data?.list || []
+}
+
+module.exports = { openPosition, closePosition, getPositions, getFills, IS_DEMO }
