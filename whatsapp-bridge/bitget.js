@@ -46,11 +46,15 @@ async function bitgetRequest(method, path, { query = '', body = null } = {}) {
 }
 
 // direction: 'long' | 'short'. qty is the base-coin BTC size.
+// posSide is required when the account is in hedge-mode (Bitget error 25236
+// "Incorrect position open type" otherwise) -- it always names the position
+// side being affected, independent of the buy/sell order action itself.
 async function openPosition({ symbol, direction, qty, stopLossPrice, takeProfitPrice }) {
   const body = {
     category: 'USDT-FUTURES',
     symbol,
     side: direction === 'long' ? 'buy' : 'sell',
+    posSide: direction,
     orderType: 'market',
     qty: String(qty),
     marginMode: 'crossed',
@@ -68,6 +72,7 @@ async function closePosition({ symbol, direction, qty }) {
     category: 'USDT-FUTURES',
     symbol,
     side: direction === 'long' ? 'sell' : 'buy',
+    posSide: direction,
     orderType: 'market',
     qty: String(qty),
     marginMode: 'crossed',
