@@ -89,6 +89,21 @@ async function closePosition({ symbol, direction, qty }) {
   return bitgetRequest('POST', '/api/v3/trade/place-order', { body })
 }
 
+// Sets the account's leverage for this symbol before opening a position --
+// otherwise Bitget just uses whatever leverage was last configured (could be
+// a much higher default set outside our control, e.g. via the web UI).
+async function setLeverage({ symbol, leverage }) {
+  const body = { category: 'USDT-FUTURES', symbol, leverage: String(leverage), marginMode: 'crossed' }
+  return bitgetRequest('POST', '/api/v3/account/set-leverage', { body })
+}
+
+// Real USDT balance backing position sizing, so "20% of the account" means
+// 20% of what's actually there, not a guessed flat dollar amount.
+async function getAccountBalance() {
+  const data = await bitgetRequest('GET', '/api/v3/account/assets')
+  return Number(data?.usdtEquity ?? 0)
+}
+
 // Returns every open position for this symbol (hedge-mode accounts can hold
 // a long AND a short at once), so callers must filter by posSide themselves.
 async function getPositions({ symbol }) {
@@ -106,4 +121,12 @@ async function getFills({ symbol, limit = 20 }) {
   return data?.list || []
 }
 
-module.exports = { openPosition, closePosition, getPositions, getFills, IS_DEMO }
+module.exports = {
+  openPosition,
+  closePosition,
+  setLeverage,
+  getAccountBalance,
+  getPositions,
+  getFills,
+  IS_DEMO,
+}

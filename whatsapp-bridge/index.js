@@ -22,9 +22,14 @@ const db = require('./supabase')
 const PORT = process.env.PORT || 3000
 const BRIDGE_SECRET = process.env.BRIDGE_SECRET
 const CHANNEL_JID = process.env.CHANNEL_JID // e.g. 120363412044603667@newsletter
-// Base USD notional for a "Full size" (100%) trade. Reduced/Standard combos
-// scale down from here via the signal's own position_size_pct.
-const BASE_TRADE_USD = Number(process.env.BASE_TRADE_USD || 1000)
+
+// Position sizing is a % of the account's REAL balance put up as margin, not
+// a flat guessed dollar amount -- a "Full size" (100%) signal risks
+// MAX_MARGIN_PCT of the account, "Standard" (75%) and "Reduced" (50%) scale
+// down from there via the signal's own position_size_pct. Leverage then
+// multiplies that margin into the actual position size.
+const MAX_MARGIN_PCT = Number(process.env.MAX_MARGIN_PCT || 20) // Full-size trade risks this % of account equity
+const LEVERAGE = Number(process.env.BITGET_LEVERAGE || 15)
 
 if (!BRIDGE_SECRET || !CHANNEL_JID) {
   console.error('BRIDGE_SECRET and CHANNEL_JID env vars are required.')
@@ -142,8 +147,20 @@ app.post('/trade/open', requireOwner, async (req, res) => {
     const entryPrice = snapshot?.mark_price
     if (!entryPrice) return res.status(503).json({ error: 'no current price available' })
 
-    const notionalUsd = (BASE_TRADE_USD * (signal.position_size_pct || 100)) / 100
+    // Margin risked = a % of the REAL account balance (a "Full size" 100%
+    // signal risks MAX_MARGIN_PCT, Standard/Reduced scale down from there).
+    // Leverage then multiplies that margin into the actual position size --
+    // this keeps the amount at risk tied to your real balance regardless of
+    // what leverage is set, and comfortably clears Bitget's ~$84 minimum
+    // order size at any of these tiers.
+    const balance = await bitget.getAccountBalance()
+    const marginPct = (MAX_MARGIN_PCT * (signal.position_size_pct || 100)) / 100
+    const marginUsd = (balance * marginPct) / 100
+    const notionalUsd = marginUsd * LEVERAGE
     const qty = Number((notionalUsd / entryPrice).toFixed(3))
+    if (qty <= 0) return res.status(400).json({ error: 'computed position size rounds to zero' })
+
+    await bitget.setLeverage({ symbol: 'BTCUSDT', leverage: LEVERAGE })
 
     const trade = await db.insertTrade({
       signal_id: signal.id,
@@ -152,7 +169,7 @@ app.post('/trade/open', requireOwner, async (req, res) => {
       status: 'open',
       is_demo: bitget.IS_DEMO,
       position_size_pct: signal.position_size_pct,
-      margin_usd: notionalUsd,
+      margin_usd: marginUsd,
       qty,
       entry_price: entryPrice,
       stop_loss_price: signal.stop_loss_price,
