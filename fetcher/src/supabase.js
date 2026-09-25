@@ -42,12 +42,13 @@ export async function getRecentSnapshots(client, symbol, windowStart) {
 }
 
 export async function saveSignal(client, signalRow) {
-  await withRetry(async () => {
-    const { error } = await client.from('signals').insert(signalRow)
+  return withRetry(async () => {
+    const { data, error } = await client.from('signals').insert(signalRow).select().single()
 
     if (error) {
       throw new Error(`Failed to save signal: ${error.message}`)
     }
+    return data
   })
 }
 

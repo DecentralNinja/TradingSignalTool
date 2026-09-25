@@ -46,6 +46,10 @@ const REFERENCE_LEVERAGE = 10
 
 const SYMBOL = 'BTCUSDT'
 
+// Public dashboard base URL, e.g. https://btc-signal.example.com -- if set,
+// proven-signal WhatsApp alerts include a link to that signal's Take Trade page.
+const DASHBOARD_URL = process.env.DASHBOARD_URL
+
 // Wraps a data-source fetch so its failure doesn't kill the whole cycle via
 // Promise.all rejection -- logs and returns `fallback` instead of throwing.
 // Only used for basis and CFTC: real production incident history (5 days of
@@ -213,6 +217,8 @@ async function runTimeframe(client, snapshot, { timeframe, windowHours, evaluate
   // interruption), and not a repeat of the same direction already alerted on
   // last cycle (this rule re-fires every 15min while a signal holds).
   const previousSignal = await getPreviousSignal(client, SYMBOL, timeframe)
+  const savedSignal = await saveSignal(client, signalRow)
+
   if (signal !== 'neutral' && confidence === 'proven' && signal !== previousSignal) {
     const dot = signal === 'bullish' ? '🟢' : '🔴'
     let message = `${dot} BTC ${timeframe} ${signal.toUpperCase()} signal (proven)\nPrice: $${snapshot.mark_price.toLocaleString('en-US')}\n${combo}`
@@ -228,10 +234,13 @@ async function runTimeframe(client, snapshot, { timeframe, windowHours, evaluate
       message += `\nSize: ${tradeLevels.positionSizeLabel} (${tradeLevels.positionSizePct}%) — based on this combo's own reward:risk`
     }
 
+    if (DASHBOARD_URL) {
+      message += `\n\nTake trade: ${DASHBOARD_URL}/trade?signal=${savedSignal.id}`
+    }
+
     await sendWhatsApp(message)
   }
 
-  await saveSignal(client, signalRow)
   const scoredOutcomes = await scorePendingOutcomes(client, timeframe, windowHours, snapshot)
 
   return { signal: signalRow, scoredOutcomes }

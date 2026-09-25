@@ -1,0 +1,59 @@
+.login-gate {
+  display: flex;
+  justify-content: center;
+  padding: 3rem 1rem;
+
+  &__status {
+    text-align: center;
+    padding: 3rem 1rem;
+    color: var(--text-muted, #888);
+  }
+
+  &__form {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    width: 100%;
+    max-width: 320px;
+
+    h2 {
+      margin: 0;
+    }
+
+    input {
+      padding: 0.6rem 0.75rem;
+      border-radius: 8px;
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      background: rgba(255, 255, 255, 0.04);
+      color: inherit;
+      font-size: 1rem;
+    }
+
+    button {
+      padding: 0.65rem;
+      border-radius: 8px;
+      border: none;
+      background: #3b82f6;
+      color: white;
+      font-weight: 600;
+      cursor: pointer;
+
+      &:disabled {
+        opacity: 0.6;
+        cursor: default;
+      }
+    }
+  }
+
+  &__hint {
+    margin: 0;
+    font-size: 0.85rem;
+    color: var(--text-muted, #888);
+  }
+
+  &__error {
+    margin: 0;
+    color: #ef4444;
+    font-size: 0.85rem;
+  }
+}

@@ -16,10 +16,15 @@ const { Boom } = require('@hapi/boom')
 const qrcode = require('qrcode-terminal')
 const express = require('express')
 const pino = require('pino')
+const bitget = require('./bitget')
+const db = require('./supabase')
 
 const PORT = process.env.PORT || 3000
 const BRIDGE_SECRET = process.env.BRIDGE_SECRET
 const CHANNEL_JID = process.env.CHANNEL_JID // e.g. 120363412044603667@newsletter
+// Base USD notional for a "Full size" (100%) trade. Reduced/Standard combos
+// scale down from here via the signal's own position_size_pct.
+const BASE_TRADE_USD = Number(process.env.BASE_TRADE_USD || 1000)
 
 if (!BRIDGE_SECRET || !CHANNEL_JID) {
   console.error('BRIDGE_SECRET and CHANNEL_JID env vars are required.')
@@ -96,6 +101,100 @@ app.post('/send', async (req, res) => {
 
 app.get('/health', (req, res) => {
   res.json({ connected: isReady })
+})
+
+// Only the logged-in owner (Supabase Auth session from the dashboard) may
+// open or close trades. The dashboard sends its Supabase access token as a
+// normal Bearer token; we verify it directly against Supabase Auth.
+async function requireOwner(req, res, next) {
+  const token = (req.get('authorization') || '').replace(/^Bearer /, '')
+  const user = await db.verifyUser(token)
+  if (!user) return res.status(401).json({ error: 'unauthorized' })
+  req.user = user
+  next()
+}
+
+app.post('/trade/open', requireOwner, async (req, res) => {
+  const { signalId } = req.body
+  if (!signalId) return res.status(400).json({ error: 'signalId is required' })
+
+  try {
+    const signal = await db.getSignal(signalId)
+    if (!signal) return res.status(404).json({ error: 'signal not found' })
+    if (signal.signal === 'neutral') return res.status(400).json({ error: 'signal is neutral, nothing to trade' })
+
+    const direction = signal.signal === 'bullish' ? 'long' : 'short'
+    const snapshot = await db.getLatestSnapshot()
+    const entryPrice = snapshot?.mark_price
+    if (!entryPrice) return res.status(503).json({ error: 'no current price available' })
+
+    const notionalUsd = (BASE_TRADE_USD * (signal.position_size_pct || 100)) / 100
+    const qty = Number((notionalUsd / entryPrice).toFixed(3))
+
+    const trade = await db.insertTrade({
+      signal_id: signal.id,
+      symbol: 'BTCUSDT',
+      direction,
+      status: 'open',
+      is_demo: bitget.IS_DEMO,
+      position_size_pct: signal.position_size_pct,
+      margin_usd: notionalUsd,
+      qty,
+      entry_price: entryPrice,
+      stop_loss_price: signal.stop_loss_price,
+      take_profit_price: signal.take_profit_price,
+      opened_at: new Date().toISOString(),
+    })
+
+    try {
+      const order = await bitget.openPosition({
+        symbol: 'BTCUSDT',
+        direction,
+        qty,
+        stopLossPrice: signal.stop_loss_price,
+        takeProfitPrice: signal.take_profit_price,
+      })
+      await db.updateTrade(trade.id, { bitget_order_id: order?.orderId || null })
+      res.json({ ok: true, trade: { ...trade, bitget_order_id: order?.orderId } })
+    } catch (err) {
+      await db.updateTrade(trade.id, { status: 'failed', error_message: err.message })
+      throw err
+    }
+  } catch (err) {
+    console.error('Trade open failed:', err.message)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+app.post('/trade/close', requireOwner, async (req, res) => {
+  const { tradeId } = req.body
+  if (!tradeId) return res.status(400).json({ error: 'tradeId is required' })
+
+  try {
+    const trade = await db.getTrade(tradeId)
+    if (!trade) return res.status(404).json({ error: 'trade not found' })
+    if (trade.status !== 'open') return res.status(400).json({ error: `trade is already ${trade.status}` })
+
+    await bitget.closePosition({ symbol: trade.symbol, direction: trade.direction, qty: trade.qty })
+
+    const snapshot = await db.getLatestSnapshot()
+    const exitPrice = snapshot?.mark_price
+    const priceChangePct = exitPrice ? ((exitPrice - trade.entry_price) / trade.entry_price) * 100 : null
+    const pnlPct = priceChangePct != null ? (trade.direction === 'long' ? priceChangePct : -priceChangePct) : null
+    const pnlUsd = pnlPct != null ? (trade.margin_usd * pnlPct) / 100 : null
+
+    const updated = await db.updateTrade(trade.id, {
+      status: 'closed_manual',
+      exit_price: exitPrice,
+      pnl_pct: pnlPct,
+      pnl_usd: pnlUsd,
+      closed_at: new Date().toISOString(),
+    })
+    res.json({ ok: true, trade: updated })
+  } catch (err) {
+    console.error('Trade close failed:', err.message)
+    res.status(500).json({ error: err.message })
+  }
 })
 
 app.listen(PORT, () => {
