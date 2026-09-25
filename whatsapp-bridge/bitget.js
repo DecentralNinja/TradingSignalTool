@@ -45,6 +45,14 @@ async function bitgetRequest(method, path, { query = '', body = null } = {}) {
   return json.data
 }
 
+// BTCUSDT perpetual prices must be a multiple of this tick size (Bitget
+// error 45115 otherwise) -- our TP/SL come from backtested % math, which
+// produces far more decimal precision than the exchange will accept.
+const PRICE_TICK_SIZE = 0.1
+function roundToTick(price) {
+  return (Math.round(price / PRICE_TICK_SIZE) * PRICE_TICK_SIZE).toFixed(1)
+}
+
 // direction: 'long' | 'short'. qty is the base-coin BTC size.
 // posSide is required when the account is in hedge-mode (Bitget error 25236
 // "Incorrect position open type" otherwise) -- it always names the position
@@ -58,8 +66,8 @@ async function openPosition({ symbol, direction, qty, stopLossPrice, takeProfitP
     orderType: 'market',
     qty: String(qty),
     marginMode: 'crossed',
-    stopLoss: String(stopLossPrice),
-    takeProfit: String(takeProfitPrice),
+    stopLoss: roundToTick(stopLossPrice),
+    takeProfit: roundToTick(takeProfitPrice),
     slTriggerBy: 'mark',
     tpTriggerBy: 'mark',
   }
