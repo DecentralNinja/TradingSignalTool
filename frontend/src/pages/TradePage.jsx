@@ -145,7 +145,7 @@ function TradeContent({ session }) {
         </div>
       ) : (
         <p className="trade-page__done">
-          Trade {trade.status.replace('closed_', '')} · exit {formatPrice(trade.exit_price)} ·{' '}
+          Trade {trade.status.replace('closed_', '').replaceAll('_', ' ')} · exit {formatPrice(trade.exit_price)} ·{' '}
           {formatPercent(trade.pnl_pct, { signed: true })}
         </p>
       )}

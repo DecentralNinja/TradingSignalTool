@@ -389,7 +389,82 @@ async function reconcileOpenTrades() {
   }
 }
 
-setInterval(() => reconcileOpenTrades().catch((err) => console.error('Reconcile failed:', err.message)), 45000)
+// Closes trades still open past their signal's exit_by_hours. The TP/SL
+// levels are sized for that holding window; in the own-data backtest, trades
+// left running past it turned small winners into full stop-losses (+0.54%
+// net/trade closing at 4h vs +0.43% with no time limit). Runs after
+// reconcile, so a trade TP/SL already closed is never "closed" twice.
+async function closeExpiredTrades() {
+  let openTrades
+  try {
+    openTrades = await db.getOpenTrades()
+  } catch (err) {
+    console.error('Time exit: failed to load open trades:', err.message)
+    return
+  }
+
+  for (const trade of openTrades) {
+    if (!trade.signal_id || !trade.opened_at) continue
+    let signal
+    try {
+      signal = await db.getSignal(trade.signal_id)
+    } catch (err) {
+      console.error(`Time exit: failed to load signal for trade ${trade.id}:`, err.message)
+      continue
+    }
+    if (!signal?.exit_by_hours) continue
+
+    const ageHours = (Date.now() - new Date(trade.opened_at).getTime()) / 3600e3
+    if (ageHours < signal.exit_by_hours) continue
+
+    let order
+    try {
+      order = await bitget.closePosition({ symbol: trade.symbol, direction: trade.direction, qty: trade.qty })
+    } catch (err) {
+      console.error(`Time exit: failed to close trade ${trade.id} on Bitget:`, err.message)
+      continue
+    }
+
+    let exitPrice = null
+    try {
+      const filled = order?.orderId ? await bitget.getOrder({ orderId: order.orderId }) : null
+      if (Number(filled?.avgPrice) > 0) exitPrice = Number(filled.avgPrice)
+    } catch (err) {
+      console.error(`Time exit: trade ${trade.id} closed but exit fill unreadable:`, err.message)
+    }
+
+    const patch = {
+      exit_price: exitPrice,
+      ...tradePnl(trade, exitPrice),
+      closed_at: new Date().toISOString(),
+    }
+    try {
+      await db.updateTrade(trade.id, { status: 'closed_time_exit', ...patch })
+    } catch (err) {
+      // Already closed on Bitget -- never leave it marked open. Fall back to a
+      // status the DB is guaranteed to accept (e.g. migration 014 not applied).
+      console.error(`Time exit: status update failed for trade ${trade.id}, falling back:`, err.message)
+      await db
+        .updateTrade(trade.id, { status: 'closed_manual', error_message: 'Closed at time exit', ...patch })
+        .catch((e) => console.error(`Time exit: fallback update failed for trade ${trade.id}:`, e.message))
+    }
+    console.log(`Time exit: closed trade ${trade.id} after ${ageHours.toFixed(1)}h @ ${exitPrice}`)
+  }
+}
+
+// Skip a tick if the previous one is still running, so a slow pass can't
+// overlap the next and close the same trade twice.
+let maintenanceRunning = false
+setInterval(async () => {
+  if (maintenanceRunning) return
+  maintenanceRunning = true
+  try {
+    await reconcileOpenTrades().catch((err) => console.error('Reconcile failed:', err.message))
+    await closeExpiredTrades().catch((err) => console.error('Time exit failed:', err.message))
+  } finally {
+    maintenanceRunning = false
+  }
+}, 45000)
 
 app.listen(PORT, () => {
   console.log(`Bridge HTTP server listening on port ${PORT}`)

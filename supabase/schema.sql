@@ -112,7 +112,7 @@ create table if not exists trades (
   symbol text not null default 'BTCUSDT',
   direction text not null check (direction in ('long', 'short')),
   status text not null default 'open' check (
-    status in ('open', 'closed_won', 'closed_lost', 'closed_manual', 'failed')
+    status in ('open', 'closed_won', 'closed_lost', 'closed_manual', 'closed_time_exit', 'failed')
   ),
   is_demo boolean not null default true,
   position_size_pct numeric,
