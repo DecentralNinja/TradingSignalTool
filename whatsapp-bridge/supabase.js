@@ -66,6 +66,13 @@ async function getLatestSnapshot() {
   return data[0] || null
 }
 
+async function getOpenTrades() {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/trades?status=eq.open&select=*`, {
+    headers: { apikey: SERVICE_ROLE_KEY, Authorization: `Bearer ${SERVICE_ROLE_KEY}` },
+  })
+  return res.json()
+}
+
 async function getSignal(id) {
   const res = await fetch(`${SUPABASE_URL}/rest/v1/signals?id=eq.${id}&select=*`, {
     headers: { apikey: SERVICE_ROLE_KEY, Authorization: `Bearer ${SERVICE_ROLE_KEY}` },
@@ -74,4 +81,12 @@ async function getSignal(id) {
   return data[0] || null
 }
 
-module.exports = { verifyUser, insertTrade, updateTrade, getTrade, getSignal, getLatestSnapshot }
+module.exports = {
+  verifyUser,
+  insertTrade,
+  updateTrade,
+  getTrade,
+  getSignal,
+  getLatestSnapshot,
+  getOpenTrades,
+}

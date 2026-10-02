@@ -74,7 +74,9 @@ async function openPosition({ symbol, direction, qty, stopLossPrice, takeProfitP
   return bitgetRequest('POST', '/api/v3/trade/place-order', { body })
 }
 
-// Reduce-only close: closing a long is a sell, closing a short is a buy.
+// Close: closing a long is a sell, closing a short is a buy. In hedge mode
+// posSide alone makes this a close (sell + posSide long can only reduce the
+// long) -- Bitget rejects reduceOnly alongside posSide (error 25238).
 async function closePosition({ symbol, direction, qty }) {
   const body = {
     category: 'USDT-FUTURES',
@@ -84,7 +86,6 @@ async function closePosition({ symbol, direction, qty }) {
     orderType: 'market',
     qty: String(qty),
     marginMode: 'crossed',
-    reduceOnly: 'yes',
   }
   return bitgetRequest('POST', '/api/v3/trade/place-order', { body })
 }
@@ -121,6 +122,22 @@ async function getFills({ symbol, limit = 20 }) {
   return data?.list || []
 }
 
+// One order's real average fill price -- the true entry/exit of that exact
+// order, unlike the position's avgPrice, which in hedge mode is a blend of
+// every trade merged into the same long/short position.
+async function getOrder({ orderId }) {
+  return bitgetRequest('GET', '/api/v3/trade/order-info', { query: `orderId=${orderId}` })
+}
+
+// Recent filled orders, newest first. Exchange-triggered closes are marked by
+// delegateType ('pos_loss_market' = position SL fired, verified live), while
+// orders we place ourselves are plain 'market'.
+async function getOrderHistory({ symbol, limit = 50 }) {
+  const query = `category=USDT-FUTURES&symbol=${symbol}&limit=${limit}`
+  const data = await bitgetRequest('GET', '/api/v3/trade/history-orders', { query })
+  return data?.list || []
+}
+
 module.exports = {
   openPosition,
   closePosition,
@@ -128,5 +145,7 @@ module.exports = {
   getAccountBalance,
   getPositions,
   getFills,
+  getOrder,
+  getOrderHistory,
   IS_DEMO,
 }

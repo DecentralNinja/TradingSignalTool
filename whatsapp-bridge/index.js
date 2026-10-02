@@ -198,8 +198,18 @@ app.post('/trade/open', requireOwner, async (req, res) => {
         stopLossPrice: signal.stop_loss_price,
         takeProfitPrice: signal.take_profit_price,
       })
-      await db.updateTrade(trade.id, { bitget_order_id: order?.orderId || null })
-      res.json({ ok: true, trade: { ...trade, bitget_order_id: order?.orderId } })
+      // Replace the snapshot-price estimate with the order's real average
+      // fill -- PnL is computed from this per trade later, and the snapshot
+      // can be up to 15min stale (was off by ~$100-230 on real trades).
+      const patch = { bitget_order_id: order?.orderId || null }
+      try {
+        const filled = order?.orderId ? await bitget.getOrder({ orderId: order.orderId }) : null
+        if (Number(filled?.avgPrice) > 0) patch.entry_price = Number(filled.avgPrice)
+      } catch (err) {
+        console.error(`Trade ${trade.id}: could not read entry fill, keeping estimate:`, err.message)
+      }
+      await db.updateTrade(trade.id, patch)
+      res.json({ ok: true, trade: { ...trade, ...patch } })
     } catch (err) {
       await db.updateTrade(trade.id, { status: 'failed', error_message: err.message })
       throw err
@@ -219,23 +229,22 @@ app.post('/trade/close', requireOwner, async (req, res) => {
     if (!trade) return res.status(404).json({ error: 'trade not found' })
     if (trade.status !== 'open') return res.status(400).json({ error: `trade is already ${trade.status}` })
 
-    await bitget.closePosition({ symbol: trade.symbol, direction: trade.direction, qty: trade.qty })
+    const order = await bitget.closePosition({ symbol: trade.symbol, direction: trade.direction, qty: trade.qty })
 
-    // Read back the fill we just caused to get the real exit price/PnL
-    // (fees included) instead of approximating from our own price feed.
-    const fills = await bitget.getFills({ symbol: trade.symbol })
-    const closingFill = fills.find(
-      (f) => f.posSide === trade.direction && f.tradeSide?.startsWith('close_')
-    )
-    const exitPrice = closingFill ? Number(closingFill.execPrice) : null
-    const pnlUsd = closingFill ? Number(closingFill.execPnl) : null
-    const pnlPct = pnlUsd != null && trade.margin_usd ? (pnlUsd / trade.margin_usd) * 100 : null
+    // Read back the exact order we just placed for the real exit price,
+    // rather than "latest close fill", which may belong to another trade.
+    let exitPrice = null
+    try {
+      const filled = order?.orderId ? await bitget.getOrder({ orderId: order.orderId }) : null
+      if (Number(filled?.avgPrice) > 0) exitPrice = Number(filled.avgPrice)
+    } catch (err) {
+      console.error(`Trade ${trade.id}: could not read exit fill:`, err.message)
+    }
 
     const updated = await db.updateTrade(trade.id, {
       status: 'closed_manual',
       exit_price: exitPrice,
-      pnl_pct: pnlPct,
-      pnl_usd: pnlUsd,
+      ...tradePnl(trade, exitPrice),
       closed_at: new Date().toISOString(),
     })
     res.json({ ok: true, trade: updated })
@@ -245,11 +254,33 @@ app.post('/trade/close', requireOwner, async (req, res) => {
   }
 })
 
-// Bitget's own exchange-side TP/SL can close a position at any moment,
+// Gross PnL of one trade from its OWN entry, not Bitget's execPnl -- in hedge
+// mode every trade on the same side merges into one position, and Bitget
+// computes execPnl against that blended avgPrice, which misattributes profit
+// between trades (a stopped-out loser showed -$0.51 instead of its real -$4.12).
+function tradePnl(trade, exitPrice) {
+  if (exitPrice == null || !trade.entry_price) return { pnl_usd: null, pnl_pct: null }
+  const sign = trade.direction === 'long' ? 1 : -1
+  const pnlUsd = (exitPrice - Number(trade.entry_price)) * Number(trade.qty) * sign
+  const pnlPct = trade.margin_usd ? (pnlUsd / Number(trade.margin_usd)) * 100 : null
+  return { pnl_usd: pnlUsd, pnl_pct: pnlPct }
+}
+
+// Bitget's own exchange-side TP/SL can close a trade at any moment,
 // independent of this server or the dashboard being open at all (that's the
 // whole point of putting the stop-loss on the exchange, not in our code).
 // This polls every 45s so the trades table -- and the dashboard -- catch up
 // with reality instead of showing a trade as "open" forever after that.
+//
+// Hedge mode merges every trade on the same side into ONE position, so "the
+// position disappeared" only catches the last trade to close. Instead:
+// compare the position's real size with the open trades' combined qty, and
+// if some is missing, attribute each exchange-triggered close order to the
+// trade whose own TP/SL level it filled nearest to. Each trade's TP/SL is
+// its own exchange order with its own trigger price, so that match is
+// unambiguous in practice.
+const QTY_EPSILON = 1e-9
+
 async function reconcileOpenTrades() {
   let openTrades
   try {
@@ -260,55 +291,88 @@ async function reconcileOpenTrades() {
   }
   if (!openTrades.length) return
 
-  const bySymbol = {}
+  const groups = {}
   for (const trade of openTrades) {
-    bySymbol[trade.symbol] = bySymbol[trade.symbol] || []
-    bySymbol[trade.symbol].push(trade)
+    const key = `${trade.symbol}:${trade.direction}`
+    groups[key] = groups[key] || []
+    groups[key].push(trade)
   }
 
-  for (const [symbol, trades] of Object.entries(bySymbol)) {
-    let positions
+  for (const [key, trades] of Object.entries(groups)) {
+    const [symbol, direction] = key.split(':')
+    let positions, orders
     try {
       positions = await bitget.getPositions({ symbol })
+      orders = await bitget.getOrderHistory({ symbol })
     } catch (err) {
-      console.error(`Reconcile: failed to fetch ${symbol} positions:`, err.message)
+      console.error(`Reconcile: failed to fetch ${symbol} state:`, err.message)
       continue
     }
 
-    for (const trade of trades) {
-      // A closed position simply stops appearing in this list at all -- more
-      // reliable than trusting an exact size-field name we haven't verified
-      // against a live response (Bitget's docs didn't confirm it cleanly).
-      const stillOpen = positions.some((p) => (p.posSide || p.holdSide) === trade.direction)
-      if (stillOpen) continue
+    const position = positions.find((p) => (p.posSide || p.holdSide) === direction)
+    const positionQty = position ? Number(position.total) : 0
+    const openQty = trades.reduce((sum, t) => sum + Number(t.qty), 0)
+    let missingQty = openQty - positionQty
+    if (missingQty <= QTY_EPSILON) continue
 
-      try {
-        // Pull the exact closing fill from Bitget rather than approximating
-        // from our own live price feed, which drifts from the real close
-        // price the longer this poll takes to catch it.
-        const fills = await bitget.getFills({ symbol })
-        const openedAtMs = new Date(trade.opened_at).getTime()
-        const closingFill = fills.find(
-          (f) =>
-            f.posSide === trade.direction &&
-            f.tradeSide?.startsWith('close_') &&
-            Number(f.createdTime) >= openedAtMs
+    // Exchange-triggered closes on this side: closing a long is a sell,
+    // closing a short is a buy; delegateType 'market' is an order we placed.
+    const closeSide = direction === 'long' ? 'sell' : 'buy'
+    const triggeredCloses = orders.filter(
+      (o) =>
+        o.posSide === direction &&
+        o.side === closeSide &&
+        o.orderStatus === 'filled' &&
+        o.delegateType &&
+        o.delegateType !== 'market'
+    )
+
+    const unmatched = [...trades]
+    for (const order of triggeredCloses) {
+      if (missingQty <= QTY_EPSILON) break
+      const orderQty = Number(order.cumExecQty || order.qty)
+      const exitPrice = Number(order.avgPrice)
+      const candidates = unmatched.filter(
+        (t) => Math.abs(Number(t.qty) - orderQty) <= QTY_EPSILON && Number(order.createdTime) >= new Date(t.opened_at).getTime()
+      )
+      if (!candidates.length) continue
+
+      const distance = (t) =>
+        Math.min(
+          ...[t.stop_loss_price, t.take_profit_price].filter((p) => p != null).map((p) => Math.abs(Number(p) - exitPrice))
         )
+      const trade = candidates.reduce((best, t) => (distance(t) < distance(best) ? t : best))
+      unmatched.splice(unmatched.indexOf(trade), 1)
+      missingQty -= orderQty
 
-        const exitPrice = closingFill ? Number(closingFill.execPrice) : null
-        const pnlUsd = closingFill ? Number(closingFill.execPnl) : null
-        const pnlPct = pnlUsd != null && trade.margin_usd ? (pnlUsd / trade.margin_usd) * 100 : null
-
+      const pnl = tradePnl(trade, exitPrice)
+      try {
         await db.updateTrade(trade.id, {
-          status: pnlUsd != null && pnlUsd >= 0 ? 'closed_won' : 'closed_lost',
+          status: pnl.pnl_usd != null && pnl.pnl_usd >= 0 ? 'closed_won' : 'closed_lost',
           exit_price: exitPrice,
-          pnl_pct: pnlPct,
-          pnl_usd: pnlUsd,
-          closed_at: new Date().toISOString(),
+          ...pnl,
+          closed_at: new Date(Number(order.createdTime)).toISOString(),
         })
-        console.log(`Reconciled trade ${trade.id}: closed on Bitget's side (TP/SL hit)`)
+        console.log(`Reconciled trade ${trade.id}: closed on Bitget's side (${order.delegateType} @ ${exitPrice})`)
       } catch (err) {
         console.error(`Reconcile: failed to update trade ${trade.id}:`, err.message)
+      }
+    }
+
+    // Position fully gone but some trades had no identifiable close order
+    // (e.g. closed by hand in Bitget's own app) -- still closed, outcome unknown.
+    if (positionQty <= QTY_EPSILON) {
+      for (const trade of unmatched) {
+        try {
+          await db.updateTrade(trade.id, {
+            status: 'closed_manual',
+            error_message: 'Position closed on Bitget, but no matching close order was found',
+            closed_at: new Date().toISOString(),
+          })
+          console.log(`Reconciled trade ${trade.id}: position gone, close order not identified`)
+        } catch (err) {
+          console.error(`Reconcile: failed to update trade ${trade.id}:`, err.message)
+        }
       }
     }
   }
