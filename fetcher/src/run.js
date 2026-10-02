@@ -46,6 +46,12 @@ const REFERENCE_LEVERAGE = 10
 
 const SYMBOL = 'BTCUSDT'
 
+// Timeframes that send WhatsApp alerts. 1h is still evaluated, saved and
+// scored (keeps building its track record) but no longer alerts: both 1h
+// proven combos lost money net of fees in the 2026-10-02 path-based check
+// (29-day backtest and live signals since Aug), at every TP level tested.
+const ALERT_TIMEFRAMES = new Set(['4h'])
+
 // Public dashboard base URL, e.g. https://btc-signal.example.com -- if set,
 // proven-signal WhatsApp alerts include a link to that signal's Take Trade page.
 const DASHBOARD_URL = process.env.DASHBOARD_URL
@@ -219,7 +225,12 @@ async function runTimeframe(client, snapshot, { timeframe, windowHours, evaluate
   const previousSignal = await getPreviousSignal(client, SYMBOL, timeframe)
   const savedSignal = await saveSignal(client, signalRow)
 
-  if (signal !== 'neutral' && confidence === 'proven' && signal !== previousSignal) {
+  if (
+    ALERT_TIMEFRAMES.has(timeframe) &&
+    signal !== 'neutral' &&
+    confidence === 'proven' &&
+    signal !== previousSignal
+  ) {
     const dot = signal === 'bullish' ? '🟢' : '🔴'
     let message = `${dot} BTC ${timeframe} ${signal.toUpperCase()} signal (proven)\nPrice: $${snapshot.mark_price.toLocaleString('en-US')}\n${combo}`
 
