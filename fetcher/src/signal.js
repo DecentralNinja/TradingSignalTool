@@ -273,7 +273,14 @@ const TRADE_LEVELS = {
   '4h': {
     bullish: {
       'fear_greed+taker_flow': { avgWinPct: 0.713, avgLossPct: -0.401 },
-      'oi_price_trend+taker_flow': { avgWinPct: 1.951, avgLossPct: -0.566 },
+      // Was the backtest avg win (1.951), but a path check (TP/SL touched
+      // inside the 4h window, not just the 4h close) found it hit 0/15 times
+      // in the 2026-09 backtest and 0/17 live signals; best intra-window move
+      // maxed at ~1.65%. +1.0% hit 6/15 and 7/17 and flipped net/trade from
+      // -0.13% to +0.14% (backtest) / +0.01% to +0.22% (live). Small sample,
+      // re-check as more signals accumulate. Also drops sizing from Full to
+      // Standard (reward:risk 3.4 -> 1.8), which matches its weaker real edge.
+      'oi_price_trend+taker_flow': { avgWinPct: 1.0, avgLossPct: -0.566 },
       'gold_momentum+taker_flow': { avgWinPct: 1.626, avgLossPct: -0.298 },
       'gold_momentum+oi_price_trend+taker_flow': { avgWinPct: 1.789, avgLossPct: -0.304 },
     },
