@@ -30,6 +30,10 @@ const CHANNEL_JID = process.env.CHANNEL_JID // e.g. 120363412044603667@newslette
 // multiplies that margin into the actual position size.
 const MAX_MARGIN_PCT = Number(process.env.MAX_MARGIN_PCT || 20) // Full-size trade risks this % of account equity
 const LEVERAGE = Number(process.env.BITGET_LEVERAGE || 15)
+// Max trades open at once. One setup often re-alerts several times within an
+// hour (3 alerts in 90min on 2026-10-01), and taking them all stacks that many
+// times the exposure on a single move. A risk cap, not a backtested edge.
+const MAX_OPEN_TRADES = Number(process.env.MAX_OPEN_TRADES || 2)
 
 if (!BRIDGE_SECRET || !CHANNEL_JID) {
   console.error('BRIDGE_SECRET and CHANNEL_JID env vars are required.')
@@ -153,6 +157,13 @@ app.post('/trade/open', requireOwner, async (req, res) => {
           error: `This signal expired ${(ageHours - signal.exit_by_hours).toFixed(1)}h ago -- its price target is no longer valid. Wait for a fresh signal.`,
         })
       }
+    }
+
+    const openTrades = await db.getOpenTrades()
+    if (openTrades.length >= MAX_OPEN_TRADES) {
+      return res.status(400).json({
+        error: `You already have ${openTrades.length} open trade(s) -- the limit is ${MAX_OPEN_TRADES}. Close one before taking another.`,
+      })
     }
 
     const direction = signal.signal === 'bullish' ? 'long' : 'short'

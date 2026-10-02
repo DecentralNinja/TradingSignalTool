@@ -70,7 +70,9 @@ async function getOpenTrades() {
   const res = await fetch(`${SUPABASE_URL}/rest/v1/trades?status=eq.open&select=*`, {
     headers: { apikey: SERVICE_ROLE_KEY, Authorization: `Bearer ${SERVICE_ROLE_KEY}` },
   })
-  return res.json()
+  const data = await res.json()
+  if (!res.ok) throw new Error(`Supabase open-trades query failed: ${JSON.stringify(data)}`)
+  return data
 }
 
 async function getSignal(id) {
